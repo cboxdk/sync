@@ -1,0 +1,48 @@
+{
+    "name": "cboxdk/sync",
+    "description": "Framework-independent sync engine with explicit field conflicts for offline-first applications",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.4"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.32",
+        "pestphp/pest": "^5.2",
+        "phpstan/phpstan": "^2.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Cbox\\Sync\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Cbox\\Sync\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "lint": "pint --test",
+        "format": "pint",
+        "analyse": "phpstan analyse --no-progress --memory-limit=1G",
+        "license-check": "@php bin/check-licenses.php",
+        "sbom": "@php bin/generate-sbom.php",
+        "simulate": "@php bin/simulate.php",
+        "qa": [
+            "@lint",
+            "@analyse",
+            "@test",
+            "@license-check",
+            "@security-audit"
+        ],
+        "security-audit": "@composer audit --locked",
+        "docs:requirements": "@php bin/generate-requirements.php"
+    }
+}

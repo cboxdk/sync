@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate Composer metadata
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Check formatting
+        run: vendor/bin/pint --test
+
+      - name: Run static analysis
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+
+      - name: Run tests
+        run: vendor/bin/pest
+
+      - name: Run deterministic simulator
+        run: composer simulate
+
+      - name: Audit locked dependencies
+        run: composer security-audit
+
+      - name: Check dependency licenses
+        run: composer license-check
+
+      - name: Check generated requirements
+        run: |
+          php bin/generate-requirements.php
+          git diff --exit-code -- docs/requirements.md
+          test -z "$(git status --porcelain --untracked-files=all -- docs/requirements.md)"
+
+      - name: Check SBOM drift
+        run: |
+          composer sbom
+          git diff --exit-code -- sbom.json
+          test -z "$(git status --porcelain --untracked-files=all -- sbom.json)"

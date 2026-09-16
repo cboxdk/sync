@@ -1,0 +1,1538 @@
+{
+    "bomFormat": "CycloneDX",
+    "specVersion": "1.5",
+    "serialNumber": "urn:uuid:6715b157-9c07-5d55-938e-6edd8439f4fb",
+    "version": 1,
+    "metadata": {
+        "component": {
+            "type": "library",
+            "bom-ref": "pkg:composer/cboxdk/sync",
+            "group": "cboxdk",
+            "name": "sync",
+            "description": "Framework-independent sync engine with explicit field conflicts for offline-first applications"
+        }
+    },
+    "components": [
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/brianium/paratest@v7.24.1",
+            "group": "brianium",
+            "name": "paratest",
+            "version": "v7.24.1",
+            "scope": "optional",
+            "purl": "pkg:composer/brianium/paratest@v7.24.1",
+            "description": "Parallel testing for PHP",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/paratestphp/paratest/zipball/c29bc43a5cdd0124b7eff959064ae83ea902b49a"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/paratestphp/paratest.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/doctrine/deprecations@1.1.6",
+            "group": "doctrine",
+            "name": "deprecations",
+            "version": "1.1.6",
+            "scope": "optional",
+            "purl": "pkg:composer/doctrine/deprecations@1.1.6",
+            "description": "A small layer on top of trigger_error(E_USER_DEPRECATED) or PSR-3 logging with options to disable all deprecations or selectively for packages.",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/doctrine/deprecations/zipball/d4fe3e6fd9bb9e72557a19674f44d8ac7db4c6ca"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/doctrine/deprecations.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/fidry/cpu-core-counter@1.3.0",
+            "group": "fidry",
+            "name": "cpu-core-counter",
+            "version": "1.3.0",
+            "scope": "optional",
+            "purl": "pkg:composer/fidry/cpu-core-counter@1.3.0",
+            "description": "Tiny utility to get the number of CPU cores.",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/theofidry/cpu-core-counter/zipball/db9508f7b1474469d9d3c53b86f817e344732678"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/theofidry/cpu-core-counter.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/filp/whoops@2.18.4",
+            "group": "filp",
+            "name": "whoops",
+            "version": "2.18.4",
+            "scope": "optional",
+            "purl": "pkg:composer/filp/whoops@2.18.4",
+            "description": "php error handling for cool kids",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/filp/whoops/zipball/d2102955e48b9fd9ab24280a7ad12ed552752c4d"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/filp/whoops.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/jean85/pretty-package-versions@2.1.1",
+            "group": "jean85",
+            "name": "pretty-package-versions",
+            "version": "2.1.1",
+            "scope": "optional",
+            "purl": "pkg:composer/jean85/pretty-package-versions@2.1.1",
+            "description": "A library to get pretty versions strings of installed dependencies",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/Jean85/pretty-package-versions/zipball/4d7aa5dab42e2a76d99559706022885de0e18e1a"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/Jean85/pretty-package-versions.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/laravel/pint@v1.32.1",
+            "group": "laravel",
+            "name": "pint",
+            "version": "v1.32.1",
+            "scope": "optional",
+            "purl": "pkg:composer/laravel/pint@v1.32.1",
+            "description": "An opinionated code formatter for PHP.",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/laravel/pint/zipball/006bd7825eb01daf92959d060b89cd9514fe4253"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/laravel/pint.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/myclabs/deep-copy@1.14.0",
+            "group": "myclabs",
+            "name": "deep-copy",
+            "version": "1.14.0",
+            "scope": "optional",
+            "purl": "pkg:composer/myclabs/deep-copy@1.14.0",
+            "description": "Create deep copies (clones) of your objects",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/myclabs/DeepCopy/zipball/8680aa248f8e07bc8fb43f56f0f5fc77a0c96aae"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/myclabs/DeepCopy.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/nikic/php-parser@v5.9.0",
+            "group": "nikic",
+            "name": "php-parser",
+            "version": "v5.9.0",
+            "scope": "optional",
+            "purl": "pkg:composer/nikic/php-parser@v5.9.0",
+            "description": "A PHP parser written in PHP",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/nikic/PHP-Parser/zipball/9e33da9553fe7786f0962b35f4e4ecf01be89def"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/nikic/PHP-Parser.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/nunomaduro/collision@v8.9.5",
+            "group": "nunomaduro",
+            "name": "collision",
+            "version": "v8.9.5",
+            "scope": "optional",
+            "purl": "pkg:composer/nunomaduro/collision@v8.9.5",
+            "description": "Cli error handling for console/command-line PHP applications.",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/nunomaduro/collision/zipball/fb53eacd509a1d303858e2d20cfebf2d630254ec"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/nunomaduro/collision.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/nunomaduro/termwind@v2.4.0",
+            "group": "nunomaduro",
+            "name": "termwind",
+            "version": "v2.4.0",
+            "scope": "optional",
+            "purl": "pkg:composer/nunomaduro/termwind@v2.4.0",
+            "description": "It's like Tailwind CSS, but for the console.",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/nunomaduro/termwind/zipball/712a31b768f5daea284c2169a7d227031001b9a8"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/nunomaduro/termwind.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/pestphp/pest-plugin-arch@v5.0.0",
+            "group": "pestphp",
+            "name": "pest-plugin-arch",
+            "version": "v5.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/pestphp/pest-plugin-arch@v5.0.0",
+            "description": "The Arch plugin for Pest PHP.",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/pestphp/pest-plugin-arch/zipball/244465d5dc9ea9fb5ac5c9badb7eb47d1594e4c1"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/pestphp/pest-plugin-arch.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/pestphp/pest-plugin-mutate@v5.0.2",
+            "group": "pestphp",
+            "name": "pest-plugin-mutate",
+            "version": "v5.0.2",
+            "scope": "optional",
+            "purl": "pkg:composer/pestphp/pest-plugin-mutate@v5.0.2",
+            "description": "Mutates your code to find untested cases",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/pestphp/pest-plugin-mutate/zipball/d0c87110416b699413cc073b8dcc92e440d81931"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/pestphp/pest-plugin-mutate.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/pestphp/pest-plugin-profanity@v5.0.0",
+            "group": "pestphp",
+            "name": "pest-plugin-profanity",
+            "version": "v5.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/pestphp/pest-plugin-profanity@v5.0.0",
+            "description": "The Pest Profanity Plugin",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/pestphp/pest-plugin-profanity/zipball/3dedf9ea6e2876b5b31f7733d3eacbd86f4653b9"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/pestphp/pest-plugin-profanity.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/pestphp/pest-plugin@v5.0.0",
+            "group": "pestphp",
+            "name": "pest-plugin",
+            "version": "v5.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/pestphp/pest-plugin@v5.0.0",
+            "description": "The Pest plugin manager",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/pestphp/pest-plugin/zipball/87283f41aafa2561b7618be53eab00f2d06f4140"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/pestphp/pest-plugin.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/pestphp/pest@v5.2.0",
+            "group": "pestphp",
+            "name": "pest",
+            "version": "v5.2.0",
+            "scope": "optional",
+            "purl": "pkg:composer/pestphp/pest@v5.2.0",
+            "description": "The elegant PHP Testing Framework.",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/pestphp/pest/zipball/942d6aead1c5ae407998eaf4964667423e77fd43"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/pestphp/pest.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phar-io/manifest@2.0.4",
+            "group": "phar-io",
+            "name": "manifest",
+            "version": "2.0.4",
+            "scope": "optional",
+            "purl": "pkg:composer/phar-io/manifest@2.0.4",
+            "description": "Component for reading phar.io manifest information from a PHP Archive (PHAR)",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/phar-io/manifest/zipball/54750ef60c58e43759730615a392c31c80e23176"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/phar-io/manifest.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phar-io/version@3.2.1",
+            "group": "phar-io",
+            "name": "version",
+            "version": "3.2.1",
+            "scope": "optional",
+            "purl": "pkg:composer/phar-io/version@3.2.1",
+            "description": "Library for handling version information and constraints",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/phar-io/version/zipball/4f7fd7836c6f332bb2933569e566a0d6c4cbed74"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/phar-io/version.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpdocumentor/reflection-common@2.2.0",
+            "group": "phpdocumentor",
+            "name": "reflection-common",
+            "version": "2.2.0",
+            "scope": "optional",
+            "purl": "pkg:composer/phpdocumentor/reflection-common@2.2.0",
+            "description": "Common reflection classes used by phpdocumentor to reflect the code structure",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/phpDocumentor/ReflectionCommon/zipball/1d01c49d4ed62f25aa84a747ad35d5a16924662b"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/phpDocumentor/ReflectionCommon.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpdocumentor/reflection-docblock@6.0.3",
+            "group": "phpdocumentor",
+            "name": "reflection-docblock",
+            "version": "6.0.3",
+            "scope": "optional",
+            "purl": "pkg:composer/phpdocumentor/reflection-docblock@6.0.3",
+            "description": "With this component, a library can provide support for annotations via DocBlocks or otherwise retrieve information that is embedded in a DocBlock.",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/phpDocumentor/ReflectionDocBlock/zipball/7bae67520aa9f5ecc506d646810bd40d9da54582"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/phpDocumentor/ReflectionDocBlock.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpdocumentor/type-resolver@2.0.0",
+            "group": "phpdocumentor",
+            "name": "type-resolver",
+            "version": "2.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/phpdocumentor/type-resolver@2.0.0",
+            "description": "A PSR-5 based resolver of Class names, Types and Structural Element Names",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/phpDocumentor/TypeResolver/zipball/327a05bbee54120d4786a0dc67aad30226ad4cf9"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/phpDocumentor/TypeResolver.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpstan/phpdoc-parser@2.3.5",
+            "group": "phpstan",
+            "name": "phpdoc-parser",
+            "version": "2.3.5",
+            "scope": "optional",
+            "purl": "pkg:composer/phpstan/phpdoc-parser@2.3.5",
+            "description": "PHPDoc parser with support for nullable, intersection and generic types",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/phpstan/phpdoc-parser/zipball/148cefffaf0233e4c08cc13db8a195a56dd6dfe9"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/phpstan/phpdoc-parser.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpstan/phpstan@2.2.14",
+            "group": "phpstan",
+            "name": "phpstan",
+            "version": "2.2.14",
+            "scope": "optional",
+            "purl": "pkg:composer/phpstan/phpstan@2.2.14",
+            "description": "PHPStan - PHP Static Analysis Tool",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/phpstan/phpstan/zipball/9c672e7a8e791dfc3d30e55f683e73fc0b63a3ac"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpunit/php-code-coverage@14.3.3",
+            "group": "phpunit",
+            "name": "php-code-coverage",
+            "version": "14.3.3",
+            "scope": "optional",
+            "purl": "pkg:composer/phpunit/php-code-coverage@14.3.3",
+            "description": "Library that provides collection, processing, and rendering functionality for PHP code coverage information.",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/php-code-coverage/zipball/f8640c238e930b914d0098a1edbad6652e61a64a"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/php-code-coverage.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpunit/php-file-iterator@7.0.2",
+            "group": "phpunit",
+            "name": "php-file-iterator",
+            "version": "7.0.2",
+            "scope": "optional",
+            "purl": "pkg:composer/phpunit/php-file-iterator@7.0.2",
+            "description": "FilterIterator implementation that filters files based on a list of suffixes.",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/php-file-iterator/zipball/9bb4e6c58b62c1e043be995c66abec7c97307aae"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/php-file-iterator.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpunit/php-invoker@7.0.0",
+            "group": "phpunit",
+            "name": "php-invoker",
+            "version": "7.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/phpunit/php-invoker@7.0.0",
+            "description": "Invoke callables with a timeout",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/php-invoker/zipball/42e5c5cae0c65df12d1b1a3ab52bf3f50f244d88"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/php-invoker.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpunit/php-text-template@6.0.0",
+            "group": "phpunit",
+            "name": "php-text-template",
+            "version": "6.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/phpunit/php-text-template@6.0.0",
+            "description": "Simple template engine.",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/php-text-template/zipball/a47af19f93f76aa3368303d752aa5272ca3299f4"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/php-text-template.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpunit/php-timer@9.0.0",
+            "group": "phpunit",
+            "name": "php-timer",
+            "version": "9.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/phpunit/php-timer@9.0.0",
+            "description": "Utility class for timing",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/php-timer/zipball/a0e12065831f6ab0d83120dc61513eb8d9a966f6"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/php-timer.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpunit/phpunit@13.3.3",
+            "group": "phpunit",
+            "name": "phpunit",
+            "version": "13.3.3",
+            "scope": "optional",
+            "purl": "pkg:composer/phpunit/phpunit@13.3.3",
+            "description": "The PHP Unit Testing framework.",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/phpunit/zipball/0d8711067516c1f6ba1a66f762e16c2fb1a8ccd1"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/phpunit.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/psr/container@2.0.2",
+            "group": "psr",
+            "name": "container",
+            "version": "2.0.2",
+            "scope": "optional",
+            "purl": "pkg:composer/psr/container@2.0.2",
+            "description": "Common Container Interface (PHP FIG PSR-11)",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/php-fig/container/zipball/c71ecc56dfe541dbd90c5360474fbc405f8d5963"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/php-fig/container.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/psr/log@3.0.2",
+            "group": "psr",
+            "name": "log",
+            "version": "3.0.2",
+            "scope": "optional",
+            "purl": "pkg:composer/psr/log@3.0.2",
+            "description": "Common interface for logging libraries",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/php-fig/log/zipball/f16e1d5863e37f8d8c2a01719f5b34baa2b714d3"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/php-fig/log.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/psr/simple-cache@3.0.0",
+            "group": "psr",
+            "name": "simple-cache",
+            "version": "3.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/psr/simple-cache@3.0.0",
+            "description": "Common interfaces for simple caching",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/php-fig/simple-cache/zipball/764e0b3939f5ca87cb904f570ef9be2d78a07865"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/php-fig/simple-cache.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/cli-parser@5.0.1",
+            "group": "sebastian",
+            "name": "cli-parser",
+            "version": "5.0.1",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/cli-parser@5.0.1",
+            "description": "Library for parsing CLI options",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/cli-parser/zipball/eeb759ad3146b7096fb59c3195d39e071cd409e3"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/cli-parser.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/comparator@8.4.0",
+            "group": "sebastian",
+            "name": "comparator",
+            "version": "8.4.0",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/comparator@8.4.0",
+            "description": "Provides the functionality to compare PHP values for equality",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/comparator/zipball/3b070e608146cba00fd6fd1f0ffba89e5a8897fb"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/comparator.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/complexity@6.0.0",
+            "group": "sebastian",
+            "name": "complexity",
+            "version": "6.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/complexity@6.0.0",
+            "description": "Library for calculating the complexity of PHP code units",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/complexity/zipball/c5651c795c98093480df79350cb050813fc7a2f3"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/complexity.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/diff@9.0.1",
+            "group": "sebastian",
+            "name": "diff",
+            "version": "9.0.1",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/diff@9.0.1",
+            "description": "Diff implementation",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/diff/zipball/a2df6626c1baf31d5a88674882a3072f151b5a26"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/diff.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/environment@9.3.2",
+            "group": "sebastian",
+            "name": "environment",
+            "version": "9.3.2",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/environment@9.3.2",
+            "description": "Provides functionality to handle HHVM/PHP environments",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/environment/zipball/6c9e487c9eb706a8d258102a1c0b0a3e53e86c2e"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/environment.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/exporter@8.2.1",
+            "group": "sebastian",
+            "name": "exporter",
+            "version": "8.2.1",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/exporter@8.2.1",
+            "description": "Provides the functionality to export PHP variables for visualization",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/exporter/zipball/24a3b69bba4a12ab615fca9d34680c5598d9ab7a"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/exporter.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/file-filter@1.0.0",
+            "group": "sebastian",
+            "name": "file-filter",
+            "version": "1.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/file-filter@1.0.0",
+            "description": "Library for filtering files",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/file-filter/zipball/33a26f394330f6faa7684bb9cc73afb7727aae93"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/file-filter.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/git-state@1.0.0",
+            "group": "sebastian",
+            "name": "git-state",
+            "version": "1.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/git-state@1.0.0",
+            "description": "Library for describing the state of a Git checkout",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/git-state/zipball/792a952e0eba55b6960a48aeceb9f371aad1f76b"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/git-state.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/global-state@9.0.1",
+            "group": "sebastian",
+            "name": "global-state",
+            "version": "9.0.1",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/global-state@9.0.1",
+            "description": "Snapshotting of global state",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/global-state/zipball/ba68ba79da690cf7eddefd3ce5b78b20b9ba9945"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/global-state.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/lines-of-code@5.0.2",
+            "group": "sebastian",
+            "name": "lines-of-code",
+            "version": "5.0.2",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/lines-of-code@5.0.2",
+            "description": "Library for counting the lines of code in PHP source code",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/lines-of-code/zipball/d1b6f8fce682505dbd048977f1abedf1b8ad3ff8"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/lines-of-code.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/object-enumerator@8.1.0",
+            "group": "sebastian",
+            "name": "object-enumerator",
+            "version": "8.1.0",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/object-enumerator@8.1.0",
+            "description": "Traverses array structures and object graphs to enumerate all referenced objects",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/object-enumerator/zipball/511064ecde82bd747e2ba2fab3dda8d977b59576"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/object-enumerator.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/object-reflector@6.1.0",
+            "group": "sebastian",
+            "name": "object-reflector",
+            "version": "6.1.0",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/object-reflector@6.1.0",
+            "description": "Allows reflection of object attributes, including inherited and non-public ones",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/object-reflector/zipball/f71bbcdc4f95456b4622810bec64eb06372e25b2"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/object-reflector.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/recursion-context@8.0.1",
+            "group": "sebastian",
+            "name": "recursion-context",
+            "version": "8.0.1",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/recursion-context@8.0.1",
+            "description": "Provides functionality to recursively process PHP variables",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/recursion-context/zipball/32dba72f2b4642d6a93db22d6c0a9280ff2e3ca0"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/recursion-context.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/type@7.0.2",
+            "group": "sebastian",
+            "name": "type",
+            "version": "7.0.2",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/type@7.0.2",
+            "description": "Collection of value objects that represent the types of the PHP type system",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/type/zipball/bd1df467864cb95140414059a535b2d906173fcf"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/type.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/sebastian/version@7.0.0",
+            "group": "sebastian",
+            "name": "version",
+            "version": "7.0.0",
+            "scope": "optional",
+            "purl": "pkg:composer/sebastian/version@7.0.0",
+            "description": "Library that helps with managing the version number of Git-hosted PHP projects",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/sebastianbergmann/version/zipball/ad37a5552c8e2b88572249fdc19b6da7792e021b"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/sebastianbergmann/version.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/staabm/side-effects-detector@1.0.5",
+            "group": "staabm",
+            "name": "side-effects-detector",
+            "version": "1.0.5",
+            "scope": "optional",
+            "purl": "pkg:composer/staabm/side-effects-detector@1.0.5",
+            "description": "A static analysis tool to detect side effects in PHP code",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/staabm/side-effects-detector/zipball/d8334211a140ce329c13726d4a715adbddd0a163"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/staabm/side-effects-detector.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/console@v8.1.7",
+            "group": "symfony",
+            "name": "console",
+            "version": "v8.1.7",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/console@v8.1.7",
+            "description": "Eases the creation of beautiful and testable command line interfaces",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/console/zipball/29afb89f4e941f68a6e90f28e3f52ff1f6793a7d"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/console.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/deprecation-contracts@v3.7.1",
+            "group": "symfony",
+            "name": "deprecation-contracts",
+            "version": "v3.7.1",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/deprecation-contracts@v3.7.1",
+            "description": "A generic function and convention to trigger deprecation notices",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/deprecation-contracts/zipball/f3202fa1b5097b0af062dc978b32ecf63404e31d"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/deprecation-contracts.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/finder@v8.1.7",
+            "group": "symfony",
+            "name": "finder",
+            "version": "v8.1.7",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/finder@v8.1.7",
+            "description": "Finds files and directories via an intuitive fluent interface",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/finder/zipball/4fbe46a3eb64abf8a57f0364075b91f4a233e062"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/finder.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/polyfill-ctype@v1.37.0",
+            "group": "symfony",
+            "name": "polyfill-ctype",
+            "version": "v1.37.0",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/polyfill-ctype@v1.37.0",
+            "description": "Symfony polyfill for ctype functions",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/polyfill-ctype/zipball/141046a8f9477948ff284fa65be2095baafb94f2"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/polyfill-ctype.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/polyfill-intl-grapheme@v1.41.0",
+            "group": "symfony",
+            "name": "polyfill-intl-grapheme",
+            "version": "v1.41.0",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/polyfill-intl-grapheme@v1.41.0",
+            "description": "Symfony polyfill for intl's grapheme_* functions",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/polyfill-intl-grapheme/zipball/bb899c1db0aa8127dc3afe8cda4a67eb24915f8d"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/polyfill-intl-grapheme.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/polyfill-intl-normalizer@v1.42.0",
+            "group": "symfony",
+            "name": "polyfill-intl-normalizer",
+            "version": "v1.42.0",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/polyfill-intl-normalizer@v1.42.0",
+            "description": "Symfony polyfill for intl's Normalizer class and related functions",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/polyfill-intl-normalizer/zipball/aa20edea75bd9c48cfecc8360922e5a6e5c44502"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/polyfill-intl-normalizer.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/polyfill-mbstring@v1.38.2",
+            "group": "symfony",
+            "name": "polyfill-mbstring",
+            "version": "v1.38.2",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/polyfill-mbstring@v1.38.2",
+            "description": "Symfony polyfill for the Mbstring extension",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/polyfill-mbstring/zipball/d3d318bad5e7a1bfbd026009c8bfb8d8f99ae6b6"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/polyfill-mbstring.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/polyfill-php85@v1.41.0",
+            "group": "symfony",
+            "name": "polyfill-php85",
+            "version": "v1.41.0",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/polyfill-php85@v1.41.0",
+            "description": "Symfony polyfill backporting some PHP 8.5+ features to lower PHP versions",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/polyfill-php85/zipball/255fab485aaa1006ed411040c42aecd7b5302d7a"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/polyfill-php85.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/process@v8.1.7",
+            "group": "symfony",
+            "name": "process",
+            "version": "v8.1.7",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/process@v8.1.7",
+            "description": "Executes commands in sub-processes",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/process/zipball/10823b09358e690df4ff943e24e8492bb1019fc3"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/process.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/service-contracts@v3.7.3",
+            "group": "symfony",
+            "name": "service-contracts",
+            "version": "v3.7.3",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/service-contracts@v3.7.3",
+            "description": "Generic abstractions related to writing services",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/service-contracts/zipball/15e6a07ec2a2c75ceb1b21dd98105ee8456d2257"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/service-contracts.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/symfony/string@v8.1.7",
+            "group": "symfony",
+            "name": "string",
+            "version": "v8.1.7",
+            "scope": "optional",
+            "purl": "pkg:composer/symfony/string@v8.1.7",
+            "description": "Provides an object-oriented API to strings and deals with bytes, UTF-8 code points and grapheme clusters in a unified way",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/symfony/string/zipball/d950140b5f56f31901e5b7a0c04ffc3a3deb943c"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/symfony/string.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/ta-tikoma/phpunit-architecture-test@0.8.7",
+            "group": "ta-tikoma",
+            "name": "phpunit-architecture-test",
+            "version": "0.8.7",
+            "scope": "optional",
+            "purl": "pkg:composer/ta-tikoma/phpunit-architecture-test@0.8.7",
+            "description": "Methods for testing application architecture",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/ta-tikoma/phpunit-architecture-test/zipball/1248f3f506ca9641d4f68cebcd538fa489754db8"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/ta-tikoma/phpunit-architecture-test.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/theseer/tokenizer@2.0.1",
+            "group": "theseer",
+            "name": "tokenizer",
+            "version": "2.0.1",
+            "scope": "optional",
+            "purl": "pkg:composer/theseer/tokenizer@2.0.1",
+            "description": "A small library for converting tokenized PHP source code into XML and potentially other formats",
+            "licenses": [
+                {
+                    "expression": "BSD-3-Clause"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/theseer/tokenizer/zipball/7989e43bf381af0eac72e4f0ca5bcbfa81658be4"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/theseer/tokenizer.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/webmozart/assert@2.4.1",
+            "group": "webmozart",
+            "name": "assert",
+            "version": "2.4.1",
+            "scope": "optional",
+            "purl": "pkg:composer/webmozart/assert@2.4.1",
+            "description": "Assertions to validate method input/output with nice error messages.",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/webmozarts/assert/zipball/2ccb7c2e821038c03a3e6e1700c570c158c55f70"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/webmozarts/assert.git"
+                }
+            ]
+        }
+    ]
+}

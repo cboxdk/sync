@@ -1,0 +1,29 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Cbox\Sync\Persistence;
+
+use Cbox\Sync\Data\Commit;
+use Cbox\Sync\Data\ConflictGroup;
+use Cbox\Sync\Data\EntityRecord;
+use Cbox\Sync\Data\Receipt;
+
+/** Transaction workspace. All stored domain objects are immutable; copying arrays isolates a transaction. */
+class State
+{
+    /** @var array<string, EntityRecord> */
+    public array $records = [];
+
+    /** @var array<string, ConflictGroup> */
+    public array $groups = [];
+
+    /** @var array<string, Receipt> Global mutation identities */
+    public array $receipts = [];
+
+    /** @var array<string, int> */
+    public array $acknowledged = [];
+
+    /** @var array<string, list<Commit>> */
+    public array $commits = [];
+}
