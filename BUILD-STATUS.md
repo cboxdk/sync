@@ -1,6 +1,6 @@
 # Build status
 
-Unreleased framework-independent PHP foundation. One runtime requirement, `ext-pdo`, for the durable adapter. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync). No tagged release or package publication yet.
+Framework-independent PHP foundation, released as 0.1.0 on 2026-09-16. One runtime requirement, `ext-pdo`, for the durable adapter. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync).
 
 Implemented:
 
@@ -24,7 +24,7 @@ Verification on 2026-09-16:
 - `bin/concurrency.php`: 6 OS processes writing one space produce a gapless ascending commit log with every replica fully acknowledged.
 - Executed quickstart, resolution, validator and bootstrap/delta documentation examples; relative links valid; Cbox documentation importer reports complete.
 
-Breaking changes are documented in CHANGELOG.md: the `Ledger` transaction contract, `Store::transaction()` taking a space, `snapshot()` moving to `Contracts\Inspectable`, `ViewSyncService::bootstrap()` taking the view, conflict changes following first-touch order, and the earlier architecture revision.
+The contract moved substantially before this first tag; CHANGELOG.md records what changed. Being 0.x, a minor may still move it again: Composer's caret is narrow below 1.0, so `^0.1` will not resolve a future 0.2.
 
 Limits: no transport or wire format, no webhooks, no framework integration. Host authentication/authorization and cross-entity locking/constraints remain required. A space accepts one concurrent writer, by design: it is the ordering boundary. Stored payloads use PHP serialization, which is a storage detail of the reference adapter and not a cross-language format; the same is true of `Mutation::fingerprint()`. Crash durability under power loss depends on host database settings and is not proven here, nor is behaviour at non-default isolation levels or under lock-timeout tuning. Retention is available but never automatic. Filtered deltas project canonical data only; conflict/receipt delivery requires a separately authorized adapter projection. Epoch/history reset must discard old local state and version/tombstone barriers. Client-side state (`MultiViewClient`) is still in-process only. Restore remains out of scope.
 

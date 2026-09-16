@@ -2,7 +2,7 @@
 
 A framework-independent PHP sync engine for offline-first applications with one authoritative server and many replicas.
 
-This unreleased correctness spike merges independent field edits with atomic application by default, preserves complete competing proposals with trusted provenance, and supports explicit versioned conflict resolution. It includes strict revision preconditions, whole-state validation and contextual view/bootstrap references. Mutation ordering, idempotency, domain state, conflict candidates, results and acknowledgements share one in-memory transaction.
+It merges independent field edits with atomic application by default, preserves complete competing proposals with trusted provenance, and supports explicit versioned conflict resolution. It includes strict revision preconditions, whole-state validation and contextual view/bootstrap references. Mutation ordering, idempotency, domain state, conflict candidates, results and acknowledgements share one storage transaction.
 
 ```sh
 composer install

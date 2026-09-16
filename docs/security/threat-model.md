@@ -6,7 +6,7 @@ description: "Separate correctness guarantees from host security and durability.
 
 # Threat model and limitations
 
-This spike protects against accidental duplicate delivery, reordered mutation queues, conflicting offline edits, future base versions, mismatched identities and partial in-memory commits. It assumes one authoritative engine and correctly authenticated client context supplied by its host.
+The engine protects against accidental duplicate delivery, reordered mutation queues, conflicting offline edits, future base versions, mismatched identities and partial commits. It assumes one authoritative engine and correctly authenticated client context supplied by its host.
 
 The core separates trusted actor/integration context from mutation payload but does not authenticate users, authorize entity types/fields, enforce tenant membership, encrypt data, rate-limit requests or verify that a submitted replica ID belongs to a caller. Space keys separate data and sequences; that is not authorization. Before exposing an API, the host must bind authenticated access to the allowed space, public types, fields and replica ownership. A base within the current range is accepted client context, not proof the client actually observed it. `from` never proves causality.
 
