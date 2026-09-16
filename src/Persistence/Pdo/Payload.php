@@ -19,7 +19,11 @@ class Payload
 {
     public static function encode(object $value): string
     {
-        return serialize($value);
+        // Base64 because PHP encodes private and protected property names with
+        // NUL bytes, which a PostgreSQL text column cannot hold at all. Keeping
+        // the payload to a safe alphabet makes it identical on every driver
+        // instead of working by accident on the permissive ones.
+        return base64_encode(serialize($value));
     }
 
     /**
@@ -30,7 +34,11 @@ class Payload
      */
     public static function decode(string $payload, string $expected): object
     {
-        $value = unserialize($payload, ['allowed_classes' => true]);
+        $decoded = base64_decode($payload, true);
+        if ($decoded === false) {
+            throw new ProtocolException('Stored payload is not valid base64');
+        }
+        $value = unserialize($decoded, ['allowed_classes' => true]);
         if (! $value instanceof $expected) {
             throw new ProtocolException('Stored payload is not a '.$expected);
         }

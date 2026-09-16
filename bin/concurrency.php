@@ -33,7 +33,7 @@ function options(): array
 {
     $options = ['dsn' => '', 'user' => '', 'password' => '', 'writers' => '4', 'mutations' => '25', 'worker' => ''];
     /** @var list<string> $arguments */
-    $arguments = array_slice(is_array($GLOBALS['argv']) ? $GLOBALS['argv'] : [], 1);
+    $arguments = array_slice(is_array($GLOBALS['argv'] ?? null) ? $GLOBALS['argv'] : [], 1);
     foreach ($arguments as $argument) {
         if (preg_match('/^--([a-z]+)=(.*)$/', $argument, $matches) === 1 && array_key_exists($matches[1], $options)) {
             $options[$matches[1]] = $matches[2];

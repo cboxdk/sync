@@ -147,7 +147,7 @@ class InMemoryStore implements Inspectable, Store
     {
         $commits = $this->state->commits[$space] ?? [];
 
-        return $commits === [] ? new CommitSequence : $commits[array_key_last($commits)]->sequence;
+        return $commits === [] ? new CommitSequence : $commits[count($commits) - 1]->sequence;
     }
 
     public function retainedFrom(string $space): CommitSequence

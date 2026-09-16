@@ -55,10 +55,15 @@ tombstone flag, conflict group state, mutation identity, acknowledged sequence
 and commit sequence. The immutable domain objects themselves are stored as opaque
 payloads, so the schema never has to mirror every DTO.
 
-Those payloads use PHP's own serialization. That is a storage detail of this
-adapter, not a wire format — nothing outside the database reads them, and this
-package ships no transport. A cross-language representation is a transport
-concern, and `Mutation::fingerprint()` has the same limitation today.
+Those payloads use PHP's own serialization, base64-encoded. That is a storage
+detail of this adapter, not a wire format — nothing outside the database reads
+them, and this package ships no transport. A cross-language representation is a
+transport concern, and `Mutation::fingerprint()` has the same limitation today.
+
+The base64 is not decoration: PHP encodes private and protected property names
+with NUL bytes, which a PostgreSQL text column cannot hold at all. Keeping
+payloads to a safe alphabet makes them identical on every driver rather than
+working by accident on the permissive ones.
 
 The exception is `sync_fields`, which exists purely so a view's field equality is
 an index lookup rather than a scan. It stores a hash of the canonical field
@@ -85,9 +90,11 @@ safe.
 
 The whole test suite runs against all three stores — in memory, against a store
 that shares no objects across commits, and against SQLite — from the same
-fixtures, so the adapters are held to identical behaviour. CI additionally runs it
-against PostgreSQL and MySQL, along with the simulator and the concurrency
-experiment.
+fixtures, so the adapters are held to identical behaviour. It also runs against
+PostgreSQL and MySQL, in CI and on demand through `SYNC_STORE=pdo` with a
+`SYNC_DSN`, along with the simulator and the concurrency experiment. Six
+concurrent writer processes against a real PostgreSQL and a real MySQL produce a
+gapless log with every replica acknowledged.
 
 Not proven here: crash durability under power loss, which depends on
 `synchronous_commit` and `innodb_flush_log_at_trx_commit` being configured as the

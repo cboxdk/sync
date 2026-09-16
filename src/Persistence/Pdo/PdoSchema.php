@@ -38,78 +38,34 @@ class PdoSchema
         return new self(is_string($driver) ? $driver : '');
     }
 
-    /** @return list<string> */
+    /**
+     * Idempotent DDL, in order. Safe to run repeatedly on every driver.
+     *
+     * @return list<string>
+     */
     public function statements(): array
     {
-        $text = $this->driver === self::MYSQL ? 'LONGTEXT' : 'TEXT';
-        $bool = $this->driver === self::PGSQL ? 'BOOLEAN' : 'SMALLINT';
-        // Identity columns order bootstrap pages, so they must sort by bytes.
-        // MySQL's default collation is case- and accent-insensitive and would
-        // page the same data in a different order from every other driver.
-        $name = match ($this->driver) {
-            self::MYSQL => 'VARCHAR(191) COLLATE utf8mb4_bin',
-            self::PGSQL => 'TEXT COLLATE "C"',
-            default => 'TEXT',
-        };
+        $statements = [];
+        foreach ($this->tables() as $table) {
+            $statements[] = $this->createTable($table);
+        }
+        // MySQL has no CREATE INDEX IF NOT EXISTS, so its indexes are declared
+        // inside CREATE TABLE IF NOT EXISTS, which is idempotent as a whole.
+        if ($this->driver !== self::MYSQL) {
+            foreach ($this->tables() as $table) {
+                foreach ($table['indexes'] as $index) {
+                    $statements[] = sprintf(
+                        'CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)',
+                        $index['unique'] ? 'UNIQUE ' : '',
+                        $index['name'],
+                        $table['name'],
+                        implode(', ', $index['columns']),
+                    );
+                }
+            }
+        }
 
-        return [
-            "CREATE TABLE IF NOT EXISTS sync_spaces (
-                space $name NOT NULL,
-                commit_sequence BIGINT NOT NULL DEFAULT 0,
-                retained_from BIGINT NOT NULL DEFAULT 1,
-                PRIMARY KEY (space)
-            )",
-            "CREATE TABLE IF NOT EXISTS sync_records (
-                space $name NOT NULL,
-                entity_type $name NOT NULL,
-                entity_id $name NOT NULL,
-                version BIGINT NOT NULL,
-                deleted $bool NOT NULL,
-                payload $text NOT NULL,
-                PRIMARY KEY (space, entity_type, entity_id)
-            )",
-            'CREATE INDEX IF NOT EXISTS sync_records_scan ON sync_records (space, deleted, entity_type, entity_id)',
-            "CREATE TABLE IF NOT EXISTS sync_fields (
-                space $name NOT NULL,
-                entity_type $name NOT NULL,
-                entity_id $name NOT NULL,
-                field $name NOT NULL,
-                value_hash CHAR(64) NOT NULL,
-                PRIMARY KEY (space, entity_type, entity_id, field)
-            )",
-            'CREATE INDEX IF NOT EXISTS sync_fields_lookup ON sync_fields (space, field, value_hash)',
-            "CREATE TABLE IF NOT EXISTS sync_conflict_groups (
-                id $name NOT NULL,
-                space $name NOT NULL,
-                entity_type $name NOT NULL,
-                entity_id $name NOT NULL,
-                field $name NOT NULL,
-                revision BIGINT NOT NULL,
-                open_key $name NULL,
-                payload $text NOT NULL,
-                PRIMARY KEY (id)
-            )",
-            'CREATE UNIQUE INDEX IF NOT EXISTS sync_conflict_groups_open ON sync_conflict_groups (open_key)',
-            'CREATE INDEX IF NOT EXISTS sync_conflict_groups_entity ON sync_conflict_groups (space, entity_type, entity_id, field)',
-            "CREATE TABLE IF NOT EXISTS sync_receipts (
-                mutation_id $name NOT NULL,
-                space $name NOT NULL,
-                payload $text NOT NULL,
-                PRIMARY KEY (mutation_id)
-            )",
-            "CREATE TABLE IF NOT EXISTS sync_streams (
-                space $name NOT NULL,
-                replica_id $name NOT NULL,
-                acknowledged BIGINT NOT NULL,
-                PRIMARY KEY (space, replica_id)
-            )",
-            "CREATE TABLE IF NOT EXISTS sync_commits (
-                space $name NOT NULL,
-                sequence BIGINT NOT NULL,
-                payload $text NOT NULL,
-                PRIMARY KEY (space, sequence)
-            )",
-        ];
+        return $statements;
     }
 
     public function install(\PDO $connection): void
@@ -117,6 +73,129 @@ class PdoSchema
         foreach ($this->statements() as $statement) {
             $connection->exec($statement);
         }
+    }
+
+    /**
+     * @param  array{name: string, columns: list<string>, primaryKey: list<string>, indexes: list<array{name: string, unique: bool, columns: list<string>}>}  $table
+     */
+    private function createTable(array $table): string
+    {
+        $lines = $table['columns'];
+        $lines[] = 'PRIMARY KEY ('.implode(', ', $table['primaryKey']).')';
+        if ($this->driver === self::MYSQL) {
+            foreach ($table['indexes'] as $index) {
+                $lines[] = sprintf('%sKEY %s (%s)', $index['unique'] ? 'UNIQUE ' : '', $index['name'], implode(', ', $index['columns']));
+            }
+        }
+
+        return sprintf("CREATE TABLE IF NOT EXISTS %s (\n    %s\n)", $table['name'], implode(",\n    ", $lines));
+    }
+
+    /** @return list<array{name: string, columns: list<string>, primaryKey: list<string>, indexes: list<array{name: string, unique: bool, columns: list<string>}>}> */
+    private function tables(): array
+    {
+        $text = $this->driver === self::MYSQL ? 'LONGTEXT' : 'TEXT';
+        $bool = $this->driver === self::PGSQL ? 'BOOLEAN' : 'SMALLINT';
+        // Identity columns order bootstrap pages, so they must sort by bytes.
+        // MySQL's default collation is case- and accent-insensitive and would
+        // page the same data in a different order from every other driver.
+        // The length is bounded so the widest composite index stays well inside
+        // InnoDB's 3072-byte key limit at four bytes per character.
+        $name = match ($this->driver) {
+            self::MYSQL => 'VARCHAR(150) COLLATE utf8mb4_bin',
+            self::PGSQL => 'TEXT COLLATE "C"',
+            default => 'TEXT',
+        };
+
+        return [
+            [
+                'name' => 'sync_spaces',
+                'columns' => [
+                    "space $name NOT NULL",
+                    'commit_sequence BIGINT NOT NULL DEFAULT 0',
+                    'retained_from BIGINT NOT NULL DEFAULT 1',
+                ],
+                'primaryKey' => ['space'],
+                'indexes' => [],
+            ],
+            [
+                'name' => 'sync_records',
+                'columns' => [
+                    "space $name NOT NULL",
+                    "entity_type $name NOT NULL",
+                    "entity_id $name NOT NULL",
+                    'version BIGINT NOT NULL',
+                    "deleted $bool NOT NULL",
+                    "payload $text NOT NULL",
+                ],
+                'primaryKey' => ['space', 'entity_type', 'entity_id'],
+                'indexes' => [
+                    ['name' => 'sync_records_scan', 'unique' => false, 'columns' => ['space', 'deleted', 'entity_type', 'entity_id']],
+                ],
+            ],
+            [
+                'name' => 'sync_fields',
+                'columns' => [
+                    "space $name NOT NULL",
+                    "entity_type $name NOT NULL",
+                    "entity_id $name NOT NULL",
+                    "field $name NOT NULL",
+                    'value_hash CHAR(64) NOT NULL',
+                ],
+                'primaryKey' => ['space', 'entity_type', 'entity_id', 'field'],
+                'indexes' => [
+                    ['name' => 'sync_fields_lookup', 'unique' => false, 'columns' => ['space', 'field', 'value_hash']],
+                ],
+            ],
+            [
+                'name' => 'sync_conflict_groups',
+                'columns' => [
+                    "id $name NOT NULL",
+                    "space $name NOT NULL",
+                    "entity_type $name NOT NULL",
+                    "entity_id $name NOT NULL",
+                    "field $name NOT NULL",
+                    'revision BIGINT NOT NULL',
+                    "open_key $name NULL",
+                    "payload $text NOT NULL",
+                ],
+                'primaryKey' => ['id'],
+                'indexes' => [
+                    ['name' => 'sync_conflict_groups_open', 'unique' => true, 'columns' => ['open_key']],
+                    ['name' => 'sync_conflict_groups_entity', 'unique' => false, 'columns' => ['space', 'entity_type', 'entity_id', 'field']],
+                ],
+            ],
+            [
+                'name' => 'sync_receipts',
+                'columns' => [
+                    "mutation_id $name NOT NULL",
+                    "space $name NOT NULL",
+                    "payload $text NOT NULL",
+                ],
+                'primaryKey' => ['mutation_id'],
+                'indexes' => [],
+            ],
+            [
+                'name' => 'sync_streams',
+                'columns' => [
+                    "space $name NOT NULL",
+                    "replica_id $name NOT NULL",
+                    'acknowledged BIGINT NOT NULL',
+                ],
+                'primaryKey' => ['space', 'replica_id'],
+                'indexes' => [],
+            ],
+            [
+                'name' => 'sync_commits',
+                'columns' => [
+                    "space $name NOT NULL",
+                    'sequence BIGINT NOT NULL',
+                    "payload $text NOT NULL",
+                ],
+                'primaryKey' => ['space', 'sequence'],
+                'indexes' => [],
+            ],
+        ];
     }
 
     /** MySQL has no partial unique index, so the open marker is a nullable column: NULLs do not collide. */

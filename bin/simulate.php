@@ -35,7 +35,9 @@ $driver = 'memory';
 $dsn = '';
 $user = '';
 $password = '';
-foreach (array_slice($argv, 1) as $argument) {
+/** @var list<string> $arguments */
+$arguments = array_slice(is_array($GLOBALS['argv'] ?? null) ? $GLOBALS['argv'] : [], 1);
+foreach ($arguments as $argument) {
     if (str_starts_with($argument, '--store=')) {
         $driver = substr($argument, 8);
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 - 2026-09-16
+
+### Fixed
+
+- **MySQL installs now work at all.** The schema used `CREATE INDEX IF NOT EXISTS`, which SQLite and PostgreSQL accept and MySQL does not, so every MySQL migration failed on the first index. Indexes are now declared inside `CREATE TABLE IF NOT EXISTS` on MySQL, which is idempotent as a whole, and as separate statements elsewhere. Identity columns are bounded at 150 characters on MySQL so the widest composite index stays well inside InnoDB's key limit.
+- **PostgreSQL installs now work at all.** Stored payloads are base64-encoded. PHP encodes private and protected property names with NUL bytes, and a PostgreSQL text column cannot hold those, so every read came back corrupt. It worked on SQLite and MySQL only because they are permissive about it. This changes the on-disk payload format; 0.1.0 wrote data only on SQLite, and any such database has to be rebuilt.
+- Static analysis on PHP 8.5: `$argv` is read through `$GLOBALS` with a guard rather than assumed, and last-element access on a list uses `count() - 1` instead of `array_key_last()`, which is typed as possibly returning null.
+- The shipped test trait migrates a shared database once and empties the tables per test instead of dropping and recreating seven tables each time, which cost minutes of DDL per MySQL run.
+
 ## 0.1.0 - 2026-09-16
 
 ### Durable storage

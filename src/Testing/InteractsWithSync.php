@@ -49,30 +49,48 @@ trait InteractsWithSync
     {
         return match (getenv('SYNC_STORE') ?: 'memory') {
             'rehydrating' => new RehydratingStore,
-            'sqlite' => self::pdoStore('sqlite::memory:'),
+            'sqlite' => self::freshSqliteStore(),
             'pdo' => self::pdoStore((string) (getenv('SYNC_DSN') ?: ''), (string) (getenv('SYNC_DB_USER') ?: ''), (string) (getenv('SYNC_DB_PASSWORD') ?: '')),
             default => new InMemoryStore,
         };
     }
 
-    /** A schema-fresh durable store. A shared server is reset per test, which a private SQLite database does not need. */
+    protected static function freshSqliteStore(): PdoStore
+    {
+        $store = new PdoStore(new \PDO('sqlite::memory:'));
+        $store->migrate();
+
+        return $store;
+    }
+
+    /** @var array<string, \PDO> One connection per DSN, so a shared server is migrated once rather than per test. */
+    private static array $connections = [];
+
+    /**
+     * A durable store with empty tables. A private SQLite database is new every
+     * time; a shared server is migrated once and then emptied, because dropping
+     * and recreating seven tables per test costs minutes of DDL on MySQL.
+     */
     protected static function pdoStore(string $dsn, string $user = '', string $password = ''): PdoStore
     {
         if ($dsn === '') {
             throw new \LogicException('SYNC_DSN must be set to run the suite against a database');
         }
-        $connection = new \PDO($dsn, $user === '' ? null : $user, $password === '' ? null : $password);
+        $fresh = ! isset(self::$connections[$dsn]);
+        $connection = self::$connections[$dsn] ??= new \PDO($dsn, $user === '' ? null : $user, $password === '' ? null : $password);
         $connection->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        if (! str_starts_with($dsn, 'sqlite:')) {
-            foreach (['sync_commits', 'sync_conflict_groups', 'sync_fields', 'sync_records', 'sync_receipts', 'sync_streams', 'sync_spaces'] as $table) {
-                $connection->exec('DROP TABLE IF EXISTS '.$table);
-            }
-        }
         $store = new PdoStore($connection);
-        $store->migrate();
+        if ($fresh) {
+            $store->migrate();
+        }
+        foreach (self::TABLES as $table) {
+            $connection->exec('DELETE FROM '.$table);
+        }
 
         return $store;
     }
+
+    private const TABLES = ['sync_commits', 'sync_conflict_groups', 'sync_fields', 'sync_records', 'sync_receipts', 'sync_streams', 'sync_spaces'];
 
     protected function seedRecord(): void
     {
@@ -161,7 +179,7 @@ trait InteractsWithSync
     {
         $commits = $this->commits();
 
-        return $commits[array_key_last($commits)] ?? throw new \LogicException('No commit in fixture');
+        return $commits === [] ? throw new \LogicException('No commit in fixture') : $commits[count($commits) - 1];
     }
 
     /** @return list<ConflictGroup> */

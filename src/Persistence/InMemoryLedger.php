@@ -69,7 +69,7 @@ class InMemoryLedger implements Ledger
     {
         $commits = $this->state->commits[$this->space] ?? [];
 
-        return $commits === [] ? new CommitSequence : $commits[array_key_last($commits)]->sequence;
+        return $commits === [] ? new CommitSequence : $commits[count($commits) - 1]->sequence;
     }
 
     public function putRecord(EntityRecord $record): void

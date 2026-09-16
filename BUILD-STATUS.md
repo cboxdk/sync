@@ -1,6 +1,6 @@
 # Build status
 
-Framework-independent PHP foundation, released as 0.1.0 on 2026-09-16. One runtime requirement, `ext-pdo`, for the durable adapter. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync).
+Framework-independent PHP foundation, released as 0.1.1 on 2026-09-16. One runtime requirement, `ext-pdo`, for the durable adapter. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync).
 
 Implemented:
 

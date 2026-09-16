@@ -40,7 +40,7 @@ class FrozenBootstrapSessions implements BootstrapSessions
                     $records[] = $record;
                 }
             }
-            $after = $batch[array_key_last($batch)]->entity;
+            $after = $batch[count($batch) - 1]->entity;
         }
         $sessionId = bin2hex(random_bytes(16));
         $this->sessions[$sessionId] = new BootstrapSession($context, $records, $watermark, $pageSize);

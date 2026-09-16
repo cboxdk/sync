@@ -72,7 +72,7 @@ class KeysetBootstrapSessions implements BootstrapSessions
 
         // Resume from the last row we read, not the last one we kept, or a
         // filtered-out record would be scanned again on the next page.
-        $last = $scanned[array_key_last($scanned)]->entity;
+        $last = $scanned[count($scanned) - 1]->entity;
         $next = $this->token($context, $watermark, $pageSize, $last, $claims['offset'] + count($records));
 
         return new BootstrapPage($records, $next, null, $context, $token, $claims['offset']);
