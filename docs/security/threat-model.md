@@ -12,8 +12,41 @@ The core separates trusted actor/integration context from mutation payload but d
 
 Field payloads accept JSON-compatible data only; nonfinite numbers, arbitrary PHP objects and depth beyond 64 are rejected. Values are whole-field replacements. There is no payload-byte quota, array-length quota or candidate limit yet. Journal/feed/conflict history grows indefinitely; do not expose unrestricted writes or assume bounded memory. Snapshots and transaction copies are deliberately simple and are unsuitable for large datasets.
 
-In-memory state is lost on process exit. The store is synchronous and single-process, refuses nested/concurrent transactions, and offers no interprocess locking or crash durability. A fiber that suspends during a transaction holds that store busy until it resumes. SQL commit ordering, storage failure recovery, restore, compaction, schema migration, durable bootstrap sessions, wire serialization, HTTP and framework integration remain future work.
+The in-memory store is lost on process exit and refuses nested or concurrent transactions; a fiber that suspends inside a transaction holds it busy until it resumes. The durable adapter serializes writers per space and is exercised against SQLite, MySQL and PostgreSQL. Storage failure recovery, restore, schema migration, wire serialization, HTTP and framework integration remain future work.
 
 There are no production-readiness or external conformance claims. Report security concerns through an established private channel to the maintainer of the checkout; no security mailbox or hosted reporting service is provisioned by this package.
 
 View identity, filter fingerprints, schema versions and epochs prevent accidental cursor-context reuse; they are not access tokens. The host authorizes every bootstrap/delta request and controls token serialization. View definitions and validators are trusted application code. On process restart or history reset, invalidate old sessions and rotate the epoch.
+
+## What a transport must bind
+
+The engine checks protocol correctness. It has no notion of who is calling, so
+two identifiers that arrive from a client are authority the engine will honour
+without question. A transport that forwards either one unbound is broken, and
+both failures are silent.
+
+**Replica identity.** `Mutation::$replica` selects an acknowledgement stream.
+Anyone who can name another device's replica can claim its sequence numbers, and
+that device's next push then fails with a terminal `ProtocolException` for
+reusing a sequence — with its queued mutations unrecoverable, because their
+identities are burned against different content. Namespace the replica under the
+authenticated principal, and namespace the mutation id with it: a client-chosen
+global mutation id also lets one caller burn an id another is about to use.
+
+Bind on a **stable** account identifier, never a session or token id.
+`Engine::process()` compares the stored `Provenance::$actorId` on replay, so an
+identifier that rotates at re-login turns every legitimate retry into a terminal
+protocol error.
+
+**Bootstrap tokens and view cursors.** Both name the space they read.
+`ViewSyncService::bootstrap()` and `delta()` require the caller to supply the
+context it expects and refuse anything else, so the space is asserted from the
+session rather than taken from the token — but that is the *only* check the
+engine can make. Whether this caller may read that space at all is the
+transport's decision, and a token remains a bearer credential for whoever holds
+it until the epoch rotates.
+
+**Field visibility.** A view filters rows, not columns. A projected
+`EntityRecord` carries every field, and each field's `origin` carries a
+`Provenance` naming the actor who wrote it. Serializing a record without an
+explicit field whitelist discloses both the values and their authorship.

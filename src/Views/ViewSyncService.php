@@ -40,9 +40,26 @@ class ViewSyncService
         return $this->sessions->open($context, $view, $this->store->watermark($context->space), $pageSize);
     }
 
-    public function bootstrap(BootstrapToken $token, ViewDefinition $view): BootstrapPage
+    /**
+     * Serve one page of an open bootstrap.
+     *
+     * The caller must pass the context it expects, the same way delta() carries
+     * one in its cursor. A token names the space it will read, so serving it on
+     * the token alone makes it a bearer capability: any holder reads that
+     * tenant, and an epoch rotation - the only tool for forcing every client to
+     * reset - cannot revoke it. Comparing the page's context against a
+     * caller-derived one closes both, because space, schema version and epoch
+     * are all inside the fingerprint.
+     */
+    public function bootstrap(CursorContext $context, ViewDefinition $view, BootstrapToken $token): BootstrapPage
     {
-        return $this->sessions->page($token, $view);
+        $this->validateContext($context, $view);
+        $page = $this->sessions->page($token, $view);
+        if (! hash_equals($context->fingerprint(), $page->context->fingerprint())) {
+            throw new ResetRequired(ResetReason::ContextChanged);
+        }
+
+        return $page;
     }
 
     public function delta(ViewCursor $cursor, ViewDefinition $view, int $commitBudget = 100): DeltaPage

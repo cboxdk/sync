@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 - 2026-09-16
+
+### Security
+
+- **A bootstrap token was a bearer capability for the space it named.** `ViewSyncService::bootstrap()` never validated the context, unlike `openBootstrap()` and `delta()`, so a token served pages on its own authority: two tenants sharing a view definition — the normal case, since the space is a separate axis and does not enter the filter signature — could read each other's data by forwarding the token, and an epoch rotation could not revoke an already-issued one. `bootstrap()` now takes the context the caller expects and refuses a page whose context does not match it. **Breaking:** the signature is now `bootstrap(CursorContext $context, ViewDefinition $view, BootstrapToken $token)`.
+- Document what a transport must bind, in `docs/security/threat-model.md`: replica and mutation identity arrive from the client and are authority the engine honours without question, so an unbound replica id lets any caller claim another device's sequence numbers and wedge it permanently. Also states that a view filters rows and not columns, and that a record's field origins name the actor who wrote each one.
+
+### Fixed
+
+- `PdoStore` resolves its PDO handle per call through an overridable `connection()` rather than capturing it at construction. A host whose framework replaces the connection after a reconnect — what happens under a long-running worker — would otherwise open the transaction on the new connection while the writes went to the dead one, with the rollback rolling back nothing. Silent partial persistence, no error anywhere.
+
 ## 0.1.1 - 2026-09-16
 
 ### Fixed

@@ -33,13 +33,14 @@ it('pages a bootstrap across processes that share no memory', function () {
     $view = FieldEqualsView::matching('by-project', '1', 'project', 'alpha', 'items');
     $watermark = $scenario->store->watermark('test');
 
-    $token = keysetSync($scenario)->openBootstrap(keysetSync($scenario)->context('test', $view), $view, 2);
+    $context = keysetSync($scenario)->context('test', $view);
+    $token = keysetSync($scenario)->openBootstrap($context, $view, 2);
 
     $seen = [];
     $pages = 0;
     $page = null;
     while ($token !== null) {
-        $page = keysetSync($scenario)->bootstrap($token, $view);
+        $page = keysetSync($scenario)->bootstrap($context, $view, $token);
         expect($page)->toBeInstanceOf(BootstrapPage::class);
         foreach ($page->records as $record) {
             $seen[] = $record->entity->id;
@@ -64,8 +65,8 @@ it('refuses a tampered or unsigned bootstrap token', function () {
     [$payload, $signature] = explode('.', $token->value);
     $forged = new BootstrapToken(rtrim(strtr(base64_encode(str_replace('"pageSize":1', '"pageSize":9', (string) base64_decode(strtr($payload, '-_', '+/'), true))), '+/', '-_'), '=').'.'.$signature);
 
-    expect(fn () => keysetSync($scenario)->bootstrap($forged, $view))->toThrow(ResetRequired::class);
-    expect(fn () => keysetSync($scenario)->bootstrap(new BootstrapToken('not-a-token'), $view))->toThrow(ResetRequired::class);
+    expect(fn () => keysetSync($scenario)->bootstrap($sync->context('test', $view), $view, $forged))->toThrow(ResetRequired::class);
+    expect(fn () => keysetSync($scenario)->bootstrap($sync->context('test', $view), $view, new BootstrapToken('not-a-token')))->toThrow(ResetRequired::class);
 });
 
 it('refuses a token presented with a different view', function () {
@@ -77,7 +78,7 @@ it('refuses a token presented with a different view', function () {
     $token = $sync->openBootstrap($sync->context('test', $alpha), $alpha, 1);
 
     try {
-        keysetSync($scenario)->bootstrap($token, $beta);
+        keysetSync($scenario)->bootstrap(keysetSync($scenario)->context('test', $beta), $beta, $token);
         throw new LogicException('Expected a reset');
     } catch (ResetRequired $reset) {
         expect($reset->reason)->toBe(ResetReason::ContextChanged);
@@ -91,9 +92,10 @@ it('converges when the view changes underneath an open bootstrap', function () {
     }
     $view = FieldEqualsView::matching('by-project', '1', 'project', 'alpha', 'items');
     $sync = keysetSync($scenario);
-    $token = $sync->openBootstrap($sync->context('test', $view), $view, 1);
+    $context = $sync->context('test', $view);
+    $token = $sync->openBootstrap($context, $view, 1);
 
-    $first = keysetSync($scenario)->bootstrap($token, $view);
+    $first = keysetSync($scenario)->bootstrap($context, $view, $token);
     expect(array_map(fn ($record): string => $record->entity->id, $first->records))->toBe(['a']);
 
     // 'b' leaves the view and a new member appears while the bootstrap is open.
@@ -104,7 +106,7 @@ it('converges when the view changes underneath an open bootstrap', function () {
     $seen = ['a'];
     $page = $first;
     while ($token !== null) {
-        $page = keysetSync($scenario)->bootstrap($token, $view);
+        $page = keysetSync($scenario)->bootstrap($context, $view, $token);
         foreach ($page->records as $record) {
             $seen[] = $record->entity->id;
         }

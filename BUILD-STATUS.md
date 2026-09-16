@@ -1,6 +1,6 @@
 # Build status
 
-Framework-independent PHP foundation, released as 0.1.1 on 2026-09-16. One runtime requirement, `ext-pdo`, for the durable adapter. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync).
+Framework-independent PHP foundation, released as 0.2.0 on 2026-09-16. One runtime requirement, `ext-pdo`, for the durable adapter. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync).
 
 Implemented:
 
@@ -17,7 +17,7 @@ Implemented:
 
 Verification on 2026-09-16:
 
-- Pest: 88 tests, ~1,506 assertions, run three times from the same fixtures — in memory, against a store that shares no objects across commits, and against SQLite. PHP 8.4 and 8.5.
+- Pest: 91 tests, ~1,506 assertions, run three times from the same fixtures — in memory, against a store that shares no objects across commits, and against SQLite. PHP 8.4 and 8.5.
 - Full composer qa passed: Pint, PHPStan max (source, testing fixtures and scripts), all three test runs, 61 dependency licenses and full locked dependency audit.
 - Strict Composer metadata validation; SBOM and generated requirements reproduce without drift.
 - Simulator seeds 7, 42 and 2026 produce identical results in memory, on SQLite and over a DSN.

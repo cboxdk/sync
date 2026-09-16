@@ -34,15 +34,30 @@ class PdoStore implements Store
 
     private bool $active = false;
 
-    public function __construct(protected \PDO $connection, ?PdoSchema $schema = null)
+    public function __construct(private \PDO $pdo, ?PdoSchema $schema = null)
     {
-        $this->connection->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $this->schema = $schema ?? PdoSchema::forConnection($connection);
+        $this->pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $this->schema = $schema ?? PdoSchema::forConnection($this->pdo);
+    }
+
+    /**
+     * Resolved per call, never captured.
+     *
+     * A host whose framework owns the connection - and can replace it after a
+     * reconnect while this store lives on, which is what happens under a
+     * long-running worker - must override this. Holding one handle there means
+     * the transaction is opened on the framework's new connection while the
+     * writes go to the dead one, and the rollback rolls back nothing. That is
+     * silent partial persistence, with no error anywhere.
+     */
+    protected function connection(): \PDO
+    {
+        return $this->pdo;
     }
 
     public function migrate(): void
     {
-        $this->schema->install($this->connection);
+        $this->schema->install($this->connection());
     }
 
     public function transaction(string $space, \Closure $callback): mixed
@@ -80,22 +95,22 @@ class PdoStore implements Store
      */
     protected function begin(): void
     {
-        $this->connection->exec($this->schema->beginStatement());
+        $this->connection()->exec($this->schema->beginStatement());
     }
 
     protected function commit(): void
     {
-        $this->connection->exec('COMMIT');
+        $this->connection()->exec('COMMIT');
     }
 
     protected function rollback(): void
     {
-        $this->connection->exec('ROLLBACK');
+        $this->connection()->exec('ROLLBACK');
     }
 
     protected function ledger(string $space): Ledger
     {
-        return new PdoLedger($this->connection, $this->schema, $space);
+        return new PdoLedger($this->connection(), $this->schema, $space);
     }
 
     /** Adapter hook; failure here rolls back even results and acknowledgements. */
@@ -285,7 +300,7 @@ class PdoStore implements Store
      */
     private function select(string $sql, array $bindings): array
     {
-        $statement = $this->connection->prepare($sql);
+        $statement = $this->connection()->prepare($sql);
         $statement->execute($bindings);
         $rows = [];
         foreach ($statement->fetchAll(\PDO::FETCH_COLUMN, 0) as $value) {
@@ -301,7 +316,7 @@ class PdoStore implements Store
     /** @param list<string|int|null> $bindings */
     private function scalar(string $sql, array $bindings): ?string
     {
-        $statement = $this->connection->prepare($sql);
+        $statement = $this->connection()->prepare($sql);
         $statement->execute($bindings);
         $value = $statement->fetchColumn();
 
@@ -311,6 +326,6 @@ class PdoStore implements Store
     /** @param list<string|int|null> $bindings */
     private function run(string $sql, array $bindings): void
     {
-        $this->connection->prepare($sql)->execute($bindings);
+        $this->connection()->prepare($sql)->execute($bindings);
     }
 }
