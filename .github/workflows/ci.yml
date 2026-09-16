@@ -52,6 +52,11 @@ jobs:
         env:
           SYNC_STORE: sqlite
 
+      - name: Run tests against the durable client state
+        run: vendor/bin/pest
+        env:
+          SYNC_CLIENT: sqlite
+
       - name: Run deterministic simulator
         run: composer simulate
 
