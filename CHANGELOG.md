@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Tests
+
+- Adds `NestedDataTest` and `RelationsTest`, pinning what field-level conflict detection actually means for nested documents and for entities that reference each other: nothing merges inside a field, a reordered object is the same value, an empty object and an empty array stay distinct at depth, a stale write to an untouched field still applies, a delete leaves a tombstone rather than a hole so following a reference reads a dead record, and a record survives leaving one view while another still owns it.
+
 ## 0.3.0 - 2026-09-16
 
 ### Durable client state
