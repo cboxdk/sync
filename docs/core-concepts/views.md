@@ -19,7 +19,7 @@ A **view** is a filtered subset inside one space, such as the entities assigned 
 - schema version;
 - server epoch.
 
-The actual signature matters. Reusing the same view name and version while changing `project = alpha` to `project = beta` is rejected. A view-definition change, schema migration that changes projected meaning, epoch rotation, unknown bootstrap token, or cursor beyond the source log raises typed `ResetRequired`. The client must explicitly migrate compatible local state or discard that view's state and bootstrap again. Core supplies a reason and no HTTP status.
+The actual signature matters. Reusing the same view name and version while changing `project = alpha` to `project = beta` is rejected. A view-definition change, schema migration that changes projected meaning, epoch rotation, unknown bootstrap token, expired bootstrap session, cursor beyond the source log, or cursor below the retention horizon raises typed `ResetRequired`. An unknown token and an expired session are separate reasons: the first means a token that was never issued, which an adapter may want to log, and the second means a legitimate retry that arrived too late. The client must explicitly migrate compatible local state or discard that view's state and bootstrap again. Core supplies a reason and no HTTP status.
 
 A cursor is continuity evidence, not authority. Every adapter must authenticate the caller and authorize the space, view definition and projected fields for every bootstrap and delta request.
 

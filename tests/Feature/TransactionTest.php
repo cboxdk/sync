@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Cbox\Sync\Contracts\Ledger;
+use Cbox\Sync\Data\EntityRecord;
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Engine;
 use Cbox\Sync\Enums\MutationKind;
@@ -9,6 +11,7 @@ use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\Testing\FailingStore;
 use Cbox\Sync\Testing\FakeIdGenerator;
+use Cbox\Sync\ValueObjects\RecordVersion;
 
 it('rolls back domain state conflicts receipts acknowledgements and feed then safely retries', function () {
     $store = new FailingStore;
@@ -33,8 +36,8 @@ it('does not expose transaction writes before commit or allow nested writes', fu
     $this->seedRecord();
     $before = serialize($this->store->snapshot());
     expect(function () use ($before) {
-        $this->store->transaction(function ($state) use ($before) {
-            $state->records = [];
+        $this->store->transaction($this->key->space, function (Ledger $ledger) use ($before) {
+            $ledger->putRecord(new EntityRecord($this->key, new RecordVersion(99)));
             expect(serialize($this->store->snapshot()))->toBe($before);
 
             return $this->write('a', 1, [Op::set('title', 'nested')]);

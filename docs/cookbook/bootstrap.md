@@ -6,7 +6,14 @@ description: "Move from a frozen initial snapshot to complete incremental delta 
 
 # Bootstrap a filtered view
 
-`ViewSyncService` is the in-memory reference for the handoff from an initial snapshot to delta. It freezes the matching records and source high watermark together from one `Store::snapshot()`. Writes after that moment do not alter later bootstrap pages. They remain after the watermark and are delivered by delta, including creates, updates, deletes, entries into the view and removals from it.
+`ViewSyncService` handles the handoff from an initial snapshot to delta. It takes the source high watermark when the bootstrap opens; writes after that moment are delivered by the following delta, including creates, updates, deletes, entries into the view and removals from it.
+
+How the pages themselves keep their place is a strategy, because the guarantee and its cost differ:
+
+- `Views\FrozenBootstrapSessions` (the default) materializes the whole view when the bootstrap opens, so retrying a token returns the identical page. Sessions live in one process: every page after the first must reach the same worker.
+- `Views\KeysetBootstrapSessions` stores nothing. The token carries the view context, the watermark and the keyset position, authenticated with a secret you supply, so any process can serve any page — which is what a load-balanced or queued deployment needs. The sort key is entity identity, which never changes, so a record that stays in the view can be neither skipped nor duplicated. What it gives up is byte-identical retry: a page reflects the records as they are when it is served. Convergence still holds, because the client applies the delta from the watermark taken at open and its version and tombstone barriers discard anything older than the bootstrap already delivered.
+
+Every page is presented with the view it belongs to, so the context binding is checked on each call rather than only at open.
 
 ```php
 use Cbox\Sync\Views\FieldEqualsView;
@@ -25,7 +32,7 @@ $client = new MultiViewClient;
 $token = $views->openBootstrap($views->context('tenant-1', $view), $view, pageSize: 100);
 
 do {
-    $page = $views->bootstrap($token);
+    $page = $views->bootstrap($token, $view);
     $client->applyBootstrap($page);
     $token = $page->nextToken;
 } while ($token !== null);

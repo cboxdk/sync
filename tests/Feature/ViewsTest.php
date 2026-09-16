@@ -25,8 +25,8 @@ it('converges from a frozen paginated bootstrap through concurrent membership an
     $view = FieldEqualsView::matching('project-alpha', 'v1', 'project', 'alpha', 'items');
     $sync = new ViewSyncService($scenario->store, 'schema-1', 'epoch-1');
     $token = $sync->openBootstrap($sync->context('test', $view), $view, 1);
-    $page = $sync->bootstrap($token);
-    $retry = $sync->bootstrap($token);
+    $page = $sync->bootstrap($token, $view);
+    $retry = $sync->bootstrap($token, $view);
     expect(serialize($retry))->toBe(serialize($page));
     expect($page->records)->toHaveCount(1)
         ->and($page->records[0]->entity->id)->toBe('a')
@@ -43,7 +43,7 @@ it('converges from a frozen paginated bootstrap through concurrent membership an
     $scenario->update($a, [Op::set('project', 'beta')], 'actor-leave');
 
     while ($page->nextToken !== null) {
-        $page = $sync->bootstrap($page->nextToken);
+        $page = $sync->bootstrap($page->nextToken, $view);
         $client->applyBootstrap($page);
     }
     expect($page->isComplete())->toBeTrue()
@@ -83,7 +83,7 @@ it('distinguishes a global tombstone from removal and emits a full record on vie
     $entering = $scenario->create('entering', 'beta');
     $view = FieldEqualsView::matching('alpha', 'v1', 'project', 'alpha');
     $sync = new ViewSyncService($scenario->store, '1', 'one');
-    $first = $sync->bootstrap($sync->openBootstrap($sync->context('test', $view), $view));
+    $first = $sync->bootstrap($sync->openBootstrap($sync->context('test', $view), $view), $view);
     $cursor = $first->cursor ?? throw new LogicException('Single page bootstrap expected');
 
     $scenario->update($removed, [Op::set('project', 'beta')]);
@@ -129,7 +129,7 @@ it('binds cursors to actual filters schema and epoch and gives typed reset reaso
         }
     }
     expect(fn () => $sync->delta(new ViewCursor($sync->context('test', $alpha), new CommitSequence(1)), $alpha))->toThrow(ResetRequired::class);
-    expect(fn () => $sync->bootstrap(new BootstrapToken('unknown')))->toThrow(ResetRequired::class);
+    expect(fn () => $sync->bootstrap(new BootstrapToken('unknown'), $alpha))->toThrow(ResetRequired::class);
 });
 
 it('advances over filtered source commits without splitting its commit budget', function () {
@@ -158,8 +158,8 @@ it('retains an entity removed from one local view while another view still owns 
     $project = FieldEqualsView::matching('alpha-project', 'v1', 'project', 'alpha');
     $open = FieldEqualsView::matching('open-items', 'v1', 'status', 'open');
     $sync = new ViewSyncService($scenario->store, '1', 'one');
-    $projectBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $project), $project));
-    $openBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $open), $open));
+    $projectBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $project), $project), $project);
+    $openBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $open), $open), $open);
     $client = new MultiViewClient;
     $client->applyBootstrap($projectBootstrap);
     $client->applyBootstrap($openBootstrap);
@@ -186,8 +186,8 @@ it('keeps the newest canonical record when overlapping views catch up in a diffe
     $project = FieldEqualsView::matching('alpha-project', 'v1', 'project', 'alpha');
     $open = FieldEqualsView::matching('open-items', 'v1', 'status', 'open');
     $sync = new ViewSyncService($scenario->store, '1', 'one');
-    $projectBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $project), $project));
-    $openBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $open), $open));
+    $projectBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $project), $project), $project);
+    $openBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $open), $open), $open);
     $client = new MultiViewClient;
     $client->applyBootstrap($projectBootstrap);
     $client->applyBootstrap($openBootstrap);
@@ -223,8 +223,8 @@ it('registers membership from an older frozen view without regressing canonical 
     $project = FieldEqualsView::matching('alpha-project', 'v1', 'project', 'alpha');
     $open = FieldEqualsView::matching('open-items', 'v1', 'status', 'open');
     $sync = new ViewSyncService($scenario->store, '1', 'one');
-    $projectBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $project), $project));
-    $openBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $open), $open));
+    $projectBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $project), $project), $project);
+    $openBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $open), $open), $open);
     $client = new MultiViewClient;
     $client->applyBootstrap($projectBootstrap);
 
@@ -254,8 +254,8 @@ it('does not resurrect a tombstone when a slower view delivers an older upsert',
     $project = FieldEqualsView::matching('alpha-project', 'v1', 'project', 'alpha');
     $open = FieldEqualsView::matching('open-items', 'v1', 'status', 'open');
     $sync = new ViewSyncService($scenario->store, '1', 'one');
-    $projectBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $project), $project));
-    $openBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $open), $open));
+    $projectBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $project), $project), $project);
+    $openBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $open), $open), $open);
     $client = new MultiViewClient;
     $client->applyBootstrap($projectBootstrap);
     $client->applyBootstrap($openBootstrap);
@@ -278,11 +278,11 @@ it('binds client application to page context and atomically deduplicates each vi
     $view = FieldEqualsView::matching('alpha', 'v1', 'project', 'alpha');
     $other = FieldEqualsView::matching('open', 'v1', 'status', 'open');
     $sync = new ViewSyncService($scenario->store, '1', 'one');
-    $bootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $view), $view));
+    $bootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('test', $view), $view), $view);
     $client = new MultiViewClient;
     $client->applyBootstrap($bootstrap);
     $client->applyBootstrap($bootstrap);
-    $otherSpaceBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('other-space', $view), $view));
+    $otherSpaceBootstrap = $sync->bootstrap($sync->openBootstrap($sync->context('other-space', $view), $view), $view);
     $client->applyBootstrap($otherSpaceBootstrap);
     expect($client->cursor($bootstrap->context)?->position->value)->toBe(1)
         ->and($client->cursor($otherSpaceBootstrap->context)?->position->value)->toBe(0);

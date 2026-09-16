@@ -9,7 +9,12 @@ use Cbox\Sync\Data\ConflictGroup;
 use Cbox\Sync\Data\EntityRecord;
 use Cbox\Sync\Data\Receipt;
 
-/** Transaction workspace. All stored domain objects are immutable; copying arrays isolates a transaction. */
+/**
+ * Whole-store contents behind the in-memory adapter. All stored domain objects
+ * are immutable; copying arrays isolates a transaction.
+ *
+ * @internal Reachable only through Contracts\Inspectable, for tests and diagnostics.
+ */
 class State
 {
     /** @var array<string, EntityRecord> */
@@ -26,4 +31,7 @@ class State
 
     /** @var array<string, list<Commit>> */
     public array $commits = [];
+
+    /** @var array<string, int> Lowest retained sequence per space, once history has been pruned */
+    public array $retainedFrom = [];
 }

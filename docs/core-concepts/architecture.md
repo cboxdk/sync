@@ -6,7 +6,7 @@ description: "Keep canonical revisions separate from feed and client order."
 
 # Architecture
 
-The core uses immutable value objects and DTOs. `Engine` depends on `Store`, `ConflictResolver`, `EntityValidator` and `IdGenerator`. The included store executes a synchronous callback against a cloned `State`; records, groups, mutations, receipts and feed entries inside that state are immutable. Success publishes a detached snapshot. An exception discards it. Nested or concurrent callbacks on the same store are refused.
+The core uses immutable value objects and DTOs. `Engine` depends on `Store`, `ConflictResolver`, `EntityValidator` and `IdGenerator`. A store runs a synchronous callback against a `Ledger`: one transaction, scoped to one space, whose every read is keyed, so an adapter never materializes the whole store. Records, groups, mutations, receipts and feed entries are immutable. Success publishes atomically. An exception discards everything. The engine never compares object identity, so a ledger is free to rehydrate its values from rows.
 
 | Concept | Scope | Advances when |
 | --- | --- | --- |
@@ -21,7 +21,9 @@ Every canonical field stores the mutation's ID, replica, sequence, original base
 
 Timestamps do not establish causality. The default UUIDv7 generator uses time only for identifier layout, following RFC 9562 section 5.7; it does not promise monotonic ordering within one millisecond. Inject another `IdGenerator` when needed.
 
-The reference `Store` exposes a whole-state transaction workspace intentionally. It proves a small working contract, not an efficient SQL repository design. A future durable adapter must provide isolation, atomicity, identity uniqueness and ordered visibility itself.
+`Ledger` offers one level of nesting, `beginDraft`/`commitDraft`/`rollbackDraft`, over records and conflict groups only. It exists because a blocked domain mutation is discarded while its receipt, acknowledgement and commit are still published. A durable adapter implements it with a savepoint rather than a copy, which keeps staged writes visible to a validator sharing the transaction.
+
+The commit sequence is not an auto-increment. `Ledger::watermark()` is a pure read and `appendCommit()` is the only thing that consumes a number, so a replay or a mutation gap — neither of which produces a commit — burns nothing. An adapter takes the space write lock when the transaction opens, before the first read, and therefore serializes writers within a space. That is what makes the sequence gapless and its visibility order match its numbering. A durable adapter still owns isolation, atomicity and global mutation-identity uniqueness: the space lock does not cover mutation IDs, which are global, so those need their own unique constraint.
 
 ## Application and persistence boundaries
 

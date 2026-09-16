@@ -7,11 +7,11 @@ namespace Cbox\Sync;
 use Cbox\Sync\Contracts\ConflictResolver;
 use Cbox\Sync\Contracts\EntityValidator;
 use Cbox\Sync\Contracts\IdGenerator;
+use Cbox\Sync\Contracts\Ledger;
 use Cbox\Sync\Contracts\Store;
 use Cbox\Sync\Data\AdapterContext;
 use Cbox\Sync\Data\Candidate;
 use Cbox\Sync\Data\Change;
-use Cbox\Sync\Data\Commit;
 use Cbox\Sync\Data\ConflictContext;
 use Cbox\Sync\Data\ConflictGroup;
 use Cbox\Sync\Data\EntityRecord;
@@ -30,7 +30,6 @@ use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Enums\MutationStatus;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\ProtocolException;
-use Cbox\Sync\Persistence\State;
 use Cbox\Sync\Resolvers\PreserveConflict;
 use Cbox\Sync\Support\UuidV7Generator;
 use Cbox\Sync\Validation\AcceptAll;
@@ -44,8 +43,8 @@ class Engine
 
     public function process(Mutation $mutation, AdapterContext $context = new AdapterContext): MutationResult
     {
-        return $this->store->transaction(function (State $state) use ($mutation, $context): MutationResult {
-            $receipt = $state->receipts[$mutation->id] ?? null;
+        return $this->store->transaction($mutation->entity->space, function (Ledger $ledger) use ($mutation, $context): MutationResult {
+            $receipt = $ledger->receipt($mutation->id);
             if ($receipt !== null) {
                 if ($receipt->mutation->fingerprint() !== $mutation->fingerprint() || $receipt->provenance->actorId !== $context->actorId || $receipt->provenance->integrationId !== $context->integrationId) {
                     throw new ProtocolException('Mutation identity reused with different content');
@@ -53,16 +52,14 @@ class Engine
 
                 return $receipt->result;
             }
-            $stream = $mutation->replica->stream($mutation->entity->space);
-            $ack = $state->acknowledged[$stream] ?? 0;
+            $ack = $ledger->acknowledged($mutation->replica);
             if ($mutation->sequence->value <= $ack) {
                 throw new ProtocolException('Sequence reused with a different mutation identity');
             }
             if ($mutation->sequence->value !== $ack + 1) {
                 return new MutationResult(MutationStatus::MutationGap, reason: 'expected_sequence_'.($ack + 1), acknowledgedSequence: $ack);
             }
-            $record = $state->records[$mutation->entity->key()] ?? null;
-            $beforeGroups = $state->groups;
+            $record = $ledger->record($mutation->entity);
             $origin = Provenance::fromMutation($mutation, $context);
             $actualVersion = $record->version ?? new RecordVersion;
             if ($mutation->expectedVersion !== null && $mutation->expectedVersion->value !== $actualVersion->value) {
@@ -75,10 +72,10 @@ class Engine
                 if ($mutation->baseVersion->value > $actualVersion->value) {
                     throw new InvalidRequest('Future base version');
                 }
-                $knowledge = $this->dependency($state, $mutation);
-                $draft = clone $state;
-                $outcome = $this->apply($draft, $mutation, $record, $knowledge, $context);
-                $proposed = $draft->records[$mutation->entity->key()] ?? null;
+                $knowledge = $this->dependency($ledger, $mutation);
+                $ledger->beginDraft();
+                $outcome = $this->apply($ledger, $mutation, $record, $knowledge, $context);
+                $proposed = $ledger->record($mutation->entity);
                 if ($proposed !== null && in_array($outcome->status, [MutationStatus::Applied, MutationStatus::Partial, MutationStatus::Noop], true)) {
                     $validation = $this->validator->validate(new ValidationContext($record, $proposed, $mutation, $origin));
                     if (! $validation->isValid()) {
@@ -87,40 +84,39 @@ class Engine
                             validation: $validation, conflicts: $outcome->conflicts);
                     }
                 }
-                if (! in_array($outcome->status, [MutationStatus::Rejected, MutationStatus::ValidationFailed], true)) {
-                    $state->records = $draft->records;
-                    $state->groups = $draft->groups;
+                if (in_array($outcome->status, [MutationStatus::Rejected, MutationStatus::ValidationFailed], true)) {
+                    $ledger->rollbackDraft();
+                } else {
+                    $ledger->commitDraft();
                 }
             }
-            $sequence = new CommitSequence(count($state->commits[$mutation->entity->space] ?? []) + 1);
+            $sequence = new CommitSequence($ledger->watermark()->value + 1);
             $result = new MutationResult($outcome->status, $outcome->recordVersion, $sequence, $outcome->reason, $outcome->decisions, $outcome->acceptedVersions, $outcome->conflictGroupIds, $mutation->sequence->value, $outcome->preconditionFailure, $outcome->validation, $outcome->conflicts);
             $receipt = new Receipt($mutation, $result, $origin);
-            $state->receipts[$mutation->id] = $receipt;
-            $state->acknowledged[$stream] = $mutation->sequence->value;
+            $ledger->putReceipt($receipt);
+            $ledger->acknowledge($mutation->replica, $mutation->sequence->value);
             $changes = [];
-            $after = $state->records[$mutation->entity->key()] ?? null;
-            if ($after !== $record) {
+            if ($ledger->recordChanged($mutation->entity)) {
+                $after = $ledger->record($mutation->entity);
                 $changes[] = new Change(count($changes), $after?->deleted ? ChangeKind::Deleted : ChangeKind::Record, record: $after, previousRecord: $record, provenance: $origin);
             }
-            foreach ($state->groups as $id => $group) {
-                if (($beforeGroups[$id] ?? null) !== $group) {
-                    $changes[] = new Change(count($changes), ChangeKind::Conflict, group: $group, provenance: $origin);
-                }
+            foreach ($ledger->touchedGroups() as $group) {
+                $changes[] = new Change(count($changes), ChangeKind::Conflict, group: $group, provenance: $origin);
             }
             $changes[] = new Change(count($changes), ChangeKind::Mutation, receipt: $receipt, provenance: $origin);
-            $state->commits[$mutation->entity->space][] = new Commit($mutation->entity->space, $sequence, $changes);
+            $ledger->appendCommit($sequence, $changes);
 
             return $result;
         });
     }
 
     /** @return array<string, FieldVersion> */
-    private function dependency(State $state, Mutation $mutation): array
+    private function dependency(Ledger $ledger, Mutation $mutation): array
     {
         if ($mutation->dependsOn === null) {
             return [];
         }
-        $previous = $state->receipts[$mutation->dependsOn] ?? null;
+        $previous = $ledger->receipt($mutation->dependsOn);
         if ($previous === null || $previous->mutation->replica->id !== $mutation->replica->id || $previous->mutation->entity->key() !== $mutation->entity->key() || $previous->mutation->sequence->value >= $mutation->sequence->value) {
             throw new InvalidRequest('Dependency must be a processed earlier mutation for the same replica, space and entity');
         }
@@ -129,7 +125,7 @@ class Engine
     }
 
     /** @param array<string, FieldVersion> $knowledge */
-    private function apply(State $state, Mutation $mutation, ?EntityRecord $record, array $knowledge, AdapterContext $context): MutationResult
+    private function apply(Ledger $ledger, Mutation $mutation, ?EntityRecord $record, array $knowledge, AdapterContext $context): MutationResult
     {
         if ($mutation->kind === MutationKind::Create) {
             if ($record !== null) {
@@ -141,7 +137,7 @@ class Engine
                 $knowledge[$operation->field] = new FieldVersion(1);
             }
             $record = new EntityRecord($mutation->entity, new RecordVersion(1), $fields);
-            $state->records[$mutation->entity->key()] = $record;
+            $ledger->putRecord($record);
 
             return new MutationResult(MutationStatus::Applied, $record->version, acceptedVersions: $knowledge);
         }
@@ -153,19 +149,19 @@ class Engine
         }
         if ($mutation->kind === MutationKind::Delete) {
             $record = new EntityRecord($record->entity, new RecordVersion($record->version->value + 1), $record->fields, true, Provenance::fromMutation($mutation, $context));
-            $state->records[$mutation->entity->key()] = $record;
+            $ledger->putRecord($record);
 
             return new MutationResult(MutationStatus::Applied, $record->version);
         }
         if ($mutation->kind === MutationKind::Resolve) {
-            return $this->resolve($state, $mutation, $record, $knowledge, $context);
+            return $this->resolve($ledger, $mutation, $record, $knowledge, $context);
         }
 
-        return $this->update($state, $mutation, $record, $knowledge, $context);
+        return $this->update($ledger, $mutation, $record, $knowledge, $context);
     }
 
     /** @param array<string, FieldVersion> $knowledge */
-    private function update(State $state, Mutation $mutation, EntityRecord $record, array $knowledge, AdapterContext $context): MutationResult
+    private function update(Ledger $ledger, Mutation $mutation, EntityRecord $record, array $knowledge, AdapterContext $context): MutationResult
     {
         $accepted = $knowledge;
         $pending = [];
@@ -192,7 +188,7 @@ class Engine
                 $pending[] = $operation;
             }
             if ($decision === ConflictDecision::Preserve) {
-                $groups[] = $this->preserve($state, $mutation, $record, $operation, $context)->id;
+                $groups[] = $this->preserve($ledger, $mutation, $record, $operation, $context)->id;
             }
         }
         if (in_array(ConflictDecision::Reject, $decisions, true)) {
@@ -210,7 +206,7 @@ class Engine
                 $accepted[$operation->field] = new FieldVersion($version);
             }
             $record = new EntityRecord($record->entity, new RecordVersion($version), $fields);
-            $state->records[$record->entity->key()] = $record;
+            $ledger->putRecord($record);
         }
         $status = $groups !== []
             ? ($pending !== [] ? MutationStatus::Partial : MutationStatus::Conflict)
@@ -219,18 +215,12 @@ class Engine
         return new MutationResult($status, $record->version, decisions: $decisions, acceptedVersions: $accepted, conflictGroupIds: $groups, conflicts: $conflicts);
     }
 
-    private function preserve(State $state, Mutation $mutation, EntityRecord $record, FieldOperation $operation, AdapterContext $context): ConflictGroup
+    private function preserve(Ledger $ledger, Mutation $mutation, EntityRecord $record, FieldOperation $operation, AdapterContext $context): ConflictGroup
     {
-        $group = null;
-        foreach ($state->groups as $existing) {
-            if ($existing->entity->key() === $record->entity->key() && $existing->field === $operation->field && $existing->isOpen()) {
-                $group = $existing;
-                break;
-            }
-        }
+        $group = $ledger->openGroup($record->entity, $operation->field);
         if ($group === null) {
             $id = $this->ids->generate();
-            if (isset($state->groups[$id])) {
+            if ($ledger->group($id) !== null) {
                 throw new ProtocolException('ID generator returned a duplicate group ID');
             }
             $group = new ConflictGroup($id, $record->entity, $operation->field);
@@ -240,20 +230,20 @@ class Engine
             $group = $group->add($origin);
         }
         $group = $group->add(Candidate::fromOperation($mutation, $operation, $context));
-        $state->groups[$group->id] = $group;
+        $ledger->putGroup($group);
 
         return $group;
     }
 
     /** @param array<string, FieldVersion> $knowledge */
-    private function resolve(State $state, Mutation $mutation, EntityRecord $record, array $knowledge, AdapterContext $context): MutationResult
+    private function resolve(Ledger $ledger, Mutation $mutation, EntityRecord $record, array $knowledge, AdapterContext $context): MutationResult
     {
         $resolution = $mutation->resolution;
         $operation = $mutation->operations[0] ?? null;
         if ($resolution === null || $operation === null) {
             throw new InvalidRequest('Missing resolution');
         }
-        $group = $state->groups[$resolution->groupId] ?? null;
+        $group = $ledger->group($resolution->groupId);
         if ($group === null || $group->entity->key() !== $record->entity->key() || $group->field !== $operation->field) {
             return $this->reject($record, 'invalid_conflict_group');
         }
@@ -271,9 +261,9 @@ class Engine
             $fields = $record->fields;
             $fields[$operation->field] = $this->field($mutation, $operation, $version, $context);
             $record = new EntityRecord($record->entity, new RecordVersion($version), $fields);
-            $state->records[$record->entity->key()] = $record;
+            $ledger->putRecord($record);
         }
-        $state->groups[$group->id] = $group->resolve($resolution->candidateIds, $mutation->id);
+        $ledger->putGroup($group->resolve($resolution->candidateIds, $mutation->id));
         $knowledge[$operation->field] = ($record->fields[$operation->field] ?? null)->version ?? new FieldVersion;
 
         return new MutationResult($sameValue ? MutationStatus::Noop : MutationStatus::Applied, $record->version, acceptedVersions: $knowledge, conflictGroupIds: [$group->id]);

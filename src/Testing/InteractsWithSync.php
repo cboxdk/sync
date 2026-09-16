@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\Sync\Testing;
 
 use Cbox\Sync\Contracts\ConflictResolver;
+use Cbox\Sync\Contracts\Ledger;
 use Cbox\Sync\Data\Commit;
 use Cbox\Sync\Data\ConflictGroup;
 use Cbox\Sync\Data\EntityRecord;
@@ -64,6 +65,19 @@ trait InteractsWithSync
     protected function record(): EntityRecord
     {
         return $this->store->snapshot()->records[$this->key->key()] ?? throw new \LogicException('No record in fixture');
+    }
+
+    /**
+     * Runs one transaction against the fixture space.
+     *
+     * @template TResult
+     *
+     * @param  \Closure(Ledger): TResult  $callback
+     * @return TResult
+     */
+    protected function inTransaction(\Closure $callback): mixed
+    {
+        return $this->store->transaction($this->key->space, $callback);
     }
 
     /** @return list<Commit> */

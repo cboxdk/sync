@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Durable storage contract (breaking changes)
+
+- Replace the whole-state transaction workspace with `Contracts\Ledger`: one transaction scoped to one space, every read keyed, so an adapter never materializes the store. `Store::transaction()` now takes the space and is generic over the callback's return type.
+- The engine no longer compares object identity to decide what changed. `Ledger::recordChanged()` and `Ledger::touchedGroups()` track writes instead, so a store that rehydrates values no longer emits a phantom record change on every no-op, rejection and precondition failure. Conflict changes now follow first-touch order, which matches `MutationResult::conflictGroupIds`; they previously followed group creation order.
+- Commit sequences are consumed only by `appendCommit()`; `watermark()` is a pure read. A replay and a mutation gap consume nothing. Adapters take the space write lock when the transaction opens.
+- `Store` gains keyed committed reads (`record`, `receipt`, `group`, `openGroups`, `acknowledged`, `watermark`, `retainedFrom`) and the paginated reads views need (`commitsAfter`, `scanRecords`). `snapshot(): State` moves to `Contracts\Inspectable`, for tests and diagnostics only.
+- Add retention: `retainedFrom()`, `InMemoryStore::prune()`, `Exceptions\HistoryUnavailable` and `ResetReason::HistoryPruned`. Pruning moves the horizon without renumbering sequences.
+- Bootstrap pagination becomes a strategy. `Views\FrozenBootstrapSessions` keeps the previous byte-identical retry in one process; `Views\KeysetBootstrapSessions` stores nothing and lets any process serve any page, using an authenticated token. `ViewSyncService::bootstrap()` now takes the view alongside the token, so context binding is checked on every page. Adds `ResetReason::BootstrapSessionExpired`.
+- Add `Views\QueryableView` with `Data\RecordCriteria` and `Data\FieldPredicate` so a store can narrow a bootstrap scan. Narrowing never decides membership; `includes()` still does.
+
 ### Architecture revision (breaking changes)
 
 - Entity mutations default to `atomic: true`; partial apply requires `atomic: false`. Complete blocked proposals remain in mutation receipts.

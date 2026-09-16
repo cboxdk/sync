@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Cbox\Sync\Views;
 
 use Cbox\Sync\Data\EntityRecord;
+use Cbox\Sync\Data\FieldPredicate;
+use Cbox\Sync\Data\RecordCriteria;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\ValueObjects\FieldValue;
 
-readonly class FieldEqualsView implements ViewDefinition
+readonly class FieldEqualsView implements QueryableView
 {
     public function __construct(
         private string $viewId,
@@ -46,6 +48,11 @@ readonly class FieldEqualsView implements ViewDefinition
             $this->expected->toJson(),
             $this->entityType,
         ]));
+    }
+
+    public function criteria(): RecordCriteria
+    {
+        return new RecordCriteria($this->entityType, [new FieldPredicate($this->field, $this->expected)]);
     }
 
     public function includes(EntityRecord $record): bool

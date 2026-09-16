@@ -13,21 +13,24 @@ use Cbox\Sync\Resolvers\RejectOnConflict;
  * and in what order. The engine currently derives all of this from whole-map
  * comparisons in Engine::process(); a keyed contract has to reproduce it.
  */
-it('emits conflict changes in group creation order, not in operation order', function () {
+it('emits conflict changes in first-touch order, matching the result group IDs', function () {
     $this->seedRecord();
     $this->write('a', 1, [Op::set('title', 'A')]);
     $this->write('a', 2, [Op::set('body', 'B')]);
     $this->write('b', 1, [Op::set('title', 'X')]);
 
     // 'body' conflicts first and opens a new group; 'title' conflicts second and
-    // joins the group opened above, which keeps its earlier position.
+    // joins the group opened by the mutation above, which was created earlier.
+    // The feed follows the order the groups were touched here, not the order
+    // they were first created, so it agrees with conflictGroupIds.
     $result = $this->write('c', 1, [Op::set('body', 'Y'), Op::set('title', 'Z')]);
     expect($result->status)->toBe(MutationStatus::Conflict);
     expect($result->conflictGroupIds)->toBe(['generated-2', 'generated-1']);
 
     $changes = $this->lastCommit()->changes;
     expect($changes)->toHaveCount(3);
-    expect(array_map(fn ($change): ?string => $change->group?->field, $changes))->toBe(['title', 'body', null]);
+    expect(array_map(fn ($change): ?string => $change->group?->field, $changes))->toBe(['body', 'title', null]);
+    expect(array_map(fn ($change): ?string => $change->group?->id, $changes))->toBe(['generated-2', 'generated-1', null]);
     expect($changes[2]->kind)->toBe(ChangeKind::Mutation);
     expect(array_map(fn ($change): int => $change->ordinal, $changes))->toBe([0, 1, 2]);
 });
