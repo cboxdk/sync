@@ -18,7 +18,7 @@ class InMemoryOutboxStore implements OutboxStore
     private array $abandoned = [];
 
     /** @var array<string, int> */
-    private array $assigned = [];
+    private array $acknowledged = [];
 
     private bool $active = false;
 
@@ -32,22 +32,19 @@ class InMemoryOutboxStore implements OutboxStore
         return $this->queue[0] ?? null;
     }
 
-    public function nextSequence(Replica $replica): int
+    public function acknowledged(Replica $replica): int
     {
-        return $this->assigned[$replica->id] = ($this->assigned[$replica->id] ?? 0) + 1;
+        return $this->acknowledged[$replica->id] ?? 0;
+    }
+
+    public function setAcknowledged(Replica $replica, int $sequence): void
+    {
+        $this->acknowledged[$replica->id] = max($sequence, $this->acknowledged[$replica->id] ?? 0);
     }
 
     public function acknowledge(string $mutationId): void
     {
         $this->queue = array_values(array_filter($this->queue, fn (Mutation $m): bool => $m->id !== $mutationId));
-    }
-
-    public function acknowledgeThrough(Replica $replica, int $sequence): void
-    {
-        $this->queue = array_values(array_filter(
-            $this->queue,
-            fn (Mutation $m): bool => $m->replica->id !== $replica->id || $m->sequence->value > $sequence,
-        ));
     }
 
     public function abandon(string $mutationId, string $reason): void
@@ -76,11 +73,11 @@ class InMemoryOutboxStore implements OutboxStore
             throw new TransientFailure('Nested outbox transaction is unsupported');
         }
         $this->active = true;
-        $snapshot = [$this->queue, $this->abandoned, $this->assigned];
+        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged];
         try {
             return $callback();
         } catch (\Throwable $failure) {
-            [$this->queue, $this->abandoned, $this->assigned] = $snapshot;
+            [$this->queue, $this->abandoned, $this->acknowledged] = $snapshot;
 
             throw $failure;
         } finally {

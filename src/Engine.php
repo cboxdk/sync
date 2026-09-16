@@ -176,7 +176,7 @@ class Engine
                 continue;
             }
             $base = max($mutation->baseVersion->value, ($knowledge[$operation->field] ?? null)->value ?? 0);
-            if (($field?->version->value ?? 0) <= $base) {
+            if (($field->version->value ?? 0) <= $base) {
                 $pending[] = $operation;
 
                 continue;

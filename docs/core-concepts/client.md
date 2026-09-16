@@ -48,9 +48,13 @@ $outbox = Outbox::for($store, new Replica($deviceId));
 $outbox->queue($entity, MutationKind::Update, [FieldOperation::set('title', $title)], $baseVersion);
 ```
 
-Sequences come from a high-water mark, not from the queue, so a number is never
-reused after its mutation is acknowledged and removed — the server treats a
-repeated sequence as a protocol error, not a retry.
+A sequence is assigned when a mutation is **sent**, not when it is queued.
+Numbering at queue time looks harmless and is not: a write the transport refuses
+has already taken a number the server never receives, so the server waits for it
+forever and every later write comes back as a gap for a number that will never
+arrive. The device is wedged permanently. Numbering at send time makes that hole
+impossible, and it is why `head()` returns a mutation numbered for this attempt
+rather than the one that was stored.
 
 A transport sends `head()` and reports back exactly one of four outcomes:
 

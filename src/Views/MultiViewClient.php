@@ -118,6 +118,12 @@ class MultiViewClient
         return false;
     }
 
+    /** The context this client recorded under a fingerprint, if it has seen it. */
+    public function contextFor(string $fingerprint): ?CursorContext
+    {
+        return $this->state->context($fingerprint);
+    }
+
     public function cursor(CursorContext $context): ?ViewCursor
     {
         return $this->state->cursor($context->fingerprint());

@@ -51,7 +51,10 @@ class Outbox
                 ($this->identity)(),
                 $entity,
                 $this->replica,
-                new MutationSequence($this->store->nextSequence($this->replica)),
+                // A placeholder. The real sequence is assigned when the
+                // mutation is handed out, so one that is never accepted does
+                // not consume a number the server will wait for forever.
+                new MutationSequence(1),
                 $kind,
                 new RecordVersion($baseVersion),
                 $operations,
@@ -65,9 +68,35 @@ class Outbox
         });
     }
 
+    /**
+     * The next mutation to send, numbered for this attempt.
+     *
+     * The sequence is assigned here rather than at queue time. A mutation that
+     * the transport refuses - a field the server will not accept, say - never
+     * reaches the engine, so if it had already taken a number the server would
+     * wait for that number forever and every later write would come back as a
+     * gap. Numbering at send time makes that hole impossible.
+     */
     public function head(): ?Mutation
     {
-        return $this->store->head();
+        $mutation = $this->store->head();
+        if ($mutation === null) {
+            return null;
+        }
+
+        return new Mutation(
+            $mutation->id,
+            $mutation->entity,
+            $mutation->replica,
+            new MutationSequence($this->store->acknowledged($this->replica) + 1),
+            $mutation->kind,
+            $mutation->baseVersion,
+            $mutation->operations,
+            $mutation->atomic,
+            $mutation->dependsOn,
+            $mutation->resolution,
+            $mutation->expectedVersion,
+        );
     }
 
     public function pending(): int
@@ -78,19 +107,23 @@ class Outbox
     /** The server processed it. Whether it applied, conflicted or was rejected, it is done. */
     public function acknowledged(Mutation $mutation): void
     {
-        $this->store->acknowledge($mutation->id);
+        $this->store->transaction(function () use ($mutation): void {
+            $this->store->setAcknowledged($this->replica, $mutation->sequence->value);
+            $this->store->acknowledge($mutation->id);
+        });
     }
 
     /**
      * The server has not seen everything before this one.
      *
-     * Only the mutations it already has are dropped; the rest stay queued and
-     * go out again in order. Clearing the whole queue here would discard writes
-     * the server never received.
+     * Nothing is dropped: the queue holds only what has not been acknowledged,
+     * and sequences are assigned at send time, so the next attempt simply
+     * numbers from where the server says it is. Clearing the queue here would
+     * discard writes the server never received.
      */
     public function resumeAfter(int $acknowledgedSequence): void
     {
-        $this->store->acknowledgeThrough($this->replica, $acknowledgedSequence);
+        $this->store->setAcknowledged($this->replica, $acknowledgedSequence);
     }
 
     /**

@@ -35,57 +35,76 @@ function note(string $id): EntityKey
     return new EntityKey('team-1', 'notes', $id);
 }
 
-it('assigns gapless sequences and never reuses one', function (OutboxStore $store) {
+it('numbers mutations only as they are sent, in order', function (OutboxStore $store) {
     $outbox = outboxFor($store);
 
-    $first = $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
-    $second = $outbox->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
 
-    expect([$first->sequence->value, $second->sequence->value])->toBe([1, 2]);
+    $first = $outbox->head() ?? throw new LogicException('expected a head');
+    expect($first->sequence->value)->toBe(1);
 
-    // Acknowledging the first must not free its number: the server treats a
-    // repeated sequence as a protocol error, not a retry.
+    // Still 1 until the server acknowledges: a number is spent on acceptance,
+    // never on an attempt.
+    expect($outbox->head()?->sequence->value)->toBe(1);
+
     $outbox->acknowledged($first);
-    expect($outbox->queue(note('c'), MutationKind::Create, [Op::set('t', 'c')], 0)->sequence->value)->toBe(3);
+    expect($outbox->head()?->sequence->value)->toBe(2);
+})->with(outboxStores());
+
+it('leaves no hole when a mutation is never accepted', function (OutboxStore $store) {
+    // The bug this prevents: a write the transport refuses has already taken a
+    // sequence number, the server never sees it, and every later write comes
+    // back as a gap for a number that will never arrive.
+    $outbox = outboxFor($store);
+    $outbox->queue(note('poison'), MutationKind::Create, [Op::set('t', 'refused')], 0);
+    $outbox->queue(note('good'), MutationKind::Create, [Op::set('t', 'fine')], 0);
+
+    $poison = $outbox->head() ?? throw new LogicException('expected a head');
+    expect($poison->sequence->value)->toBe(1);
+    $outbox->abandon($poison, 'field_not_writable');
+
+    // The next write takes the number the refused one did not.
+    expect($outbox->head()?->sequence->value)->toBe(1);
+    expect($outbox->head()?->entity->id)->toBe('good');
 })->with(outboxStores());
 
 it('hands out the oldest pending mutation first', function (OutboxStore $store) {
     $outbox = outboxFor($store);
-    $first = $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
     $outbox->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
 
-    expect($outbox->head()?->id)->toBe($first->id);
+    $first = $outbox->head() ?? throw new LogicException('expected a head');
+    expect($first->entity->id)->toBe('a');
     $outbox->acknowledged($first);
-    expect($outbox->head()?->id)->not->toBe($first->id);
+    expect($outbox->head()?->entity->id)->toBe('b');
     expect($outbox->pending())->toBe(1);
 })->with(outboxStores());
 
-it('drops only what the server already has when it reports a gap', function (OutboxStore $store) {
+it('numbers from where the server says it is after a gap', function (OutboxStore $store) {
     $outbox = outboxFor($store);
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
-    $outbox->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
-    $third = $outbox->queue(note('c'), MutationKind::Create, [Op::set('t', 'c')], 0);
 
-    // The server acknowledged through 2; 3 was never received and must survive.
-    $outbox->resumeAfter(2);
+    // The server already has through 4, from a session this device forgot.
+    $outbox->resumeAfter(4);
 
     expect($outbox->pending())->toBe(1);
-    expect($outbox->head()?->id)->toBe($third->id);
+    expect($outbox->head()?->sequence->value)->toBe(5);
 })->with(outboxStores());
 
 it('moves a terminal mutation out of the way instead of blocking the queue', function (OutboxStore $store) {
     $outbox = outboxFor($store);
-    $poison = $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
-    $next = $outbox->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
 
-    $outbox->abandon($poison, 'protocol_violation');
+    $outbox->abandon($outbox->head() ?? throw new LogicException('expected a head'), 'protocol_violation');
 
-    expect($outbox->head()?->id)->toBe($next->id);
+    expect($outbox->head()?->entity->id)->toBe('b');
     expect($outbox->abandoned())->toHaveCount(1);
     expect($outbox->abandoned()[0]['reason'])->toBe('protocol_violation');
 })->with(outboxStores());
 
-it('survives a restart with its queue and its sequence intact', function () {
+it('survives a restart with its queue and its numbering intact', function () {
     $database = tempnam(sys_get_temp_dir(), 'cbox-outbox-').'.sqlite';
     try {
         $open = function () use ($database): PdoOutboxStore {
@@ -96,15 +115,15 @@ it('survives a restart with its queue and its sequence intact', function () {
         };
         $before = outboxFor($open());
         $before->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
-        $queued = $before->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
+        $before->acknowledged($before->head() ?? throw new LogicException('expected a head'));
+        $before->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
 
         // A new process, nothing carried in memory.
         $after = outboxFor($open(), 'restarted-');
 
-        expect($after->pending())->toBe(2);
-        expect($after->head()?->entity->id)->toBe('a');
-        expect($after->queue(note('c'), MutationKind::Create, [Op::set('t', 'c')], 0)->sequence->value)
-            ->toBe($queued->sequence->value + 1);
+        expect($after->pending())->toBe(1);
+        expect($after->head()?->entity->id)->toBe('b');
+        expect($after->head()?->sequence->value)->toBe(2);
     } finally {
         @unlink($database);
     }

@@ -32,7 +32,7 @@ class PdoOutboxStore implements OutboxStore
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS sync_outbox (
             mutation_id $name NOT NULL,
             replica_id $name NOT NULL,
-            sequence BIGINT NOT NULL,
+            queued_at BIGINT NOT NULL,
             payload $text NOT NULL,
             abandoned_reason $text NULL,
             PRIMARY KEY (mutation_id)
@@ -46,39 +46,35 @@ class PdoOutboxStore implements OutboxStore
 
     public function append(Mutation $mutation): void
     {
-        $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, sequence, payload, abandoned_reason) VALUES (?, ?, ?, ?, NULL)', [
-            $mutation->id, $mutation->replica->id, $mutation->sequence->value, Payload::encode($mutation),
+        $position = (int) ($this->scalar('SELECT COALESCE(MAX(queued_at), 0) FROM sync_outbox', []) ?? '0') + 1;
+        $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, queued_at, payload, abandoned_reason) VALUES (?, ?, ?, ?, NULL)', [
+            $mutation->id, $mutation->replica->id, $position, Payload::encode($mutation),
         ]);
     }
 
     public function head(): ?Mutation
     {
-        $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE abandoned_reason IS NULL ORDER BY sequence, mutation_id LIMIT 1', []);
+        $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE abandoned_reason IS NULL ORDER BY queued_at, mutation_id LIMIT 1', []);
 
         return $payload === null ? null : Payload::decode($payload, Mutation::class);
     }
 
-    public function nextSequence(Replica $replica): int
+    public function acknowledged(Replica $replica): int
     {
-        $current = $this->scalar('SELECT assigned FROM sync_outbox_sequences WHERE replica_id = ?', [$replica->id]);
-        if ($current === null) {
-            $this->run('INSERT INTO sync_outbox_sequences (replica_id, assigned) VALUES (?, 0)', [$replica->id]);
-            $current = '0';
-        }
-        $next = (int) $current + 1;
-        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ?', [$next, $replica->id]);
+        return (int) ($this->scalar('SELECT assigned FROM sync_outbox_sequences WHERE replica_id = ?', [$replica->id]) ?? '0');
+    }
 
-        return $next;
+    public function setAcknowledged(Replica $replica, int $sequence): void
+    {
+        if ($this->scalar('SELECT 1 FROM sync_outbox_sequences WHERE replica_id = ?', [$replica->id]) === null) {
+            $this->run('INSERT INTO sync_outbox_sequences (replica_id, assigned) VALUES (?, 0)', [$replica->id]);
+        }
+        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND assigned < ?', [$sequence, $replica->id, $sequence]);
     }
 
     public function acknowledge(string $mutationId): void
     {
         $this->run('DELETE FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NULL', [$mutationId]);
-    }
-
-    public function acknowledgeThrough(Replica $replica, int $sequence): void
-    {
-        $this->run('DELETE FROM sync_outbox WHERE replica_id = ? AND sequence <= ? AND abandoned_reason IS NULL', [$replica->id, $sequence]);
     }
 
     public function abandon(string $mutationId, string $reason): void
@@ -88,7 +84,7 @@ class PdoOutboxStore implements OutboxStore
 
     public function abandoned(): array
     {
-        $statement = $this->pdo->prepare('SELECT payload, abandoned_reason FROM sync_outbox WHERE abandoned_reason IS NOT NULL ORDER BY sequence, mutation_id');
+        $statement = $this->pdo->prepare('SELECT payload, abandoned_reason FROM sync_outbox WHERE abandoned_reason IS NOT NULL ORDER BY queued_at, mutation_id');
         $statement->execute();
         $rows = [];
         foreach ($statement->fetchAll(\PDO::FETCH_NUM) as $row) {

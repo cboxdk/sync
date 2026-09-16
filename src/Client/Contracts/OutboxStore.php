@@ -18,18 +18,22 @@ use Cbox\Sync\ValueObjects\Replica;
  */
 interface OutboxStore
 {
+    /**
+     * Queue a mutation. Its sequence is a placeholder: the real one is assigned
+     * when it is handed out, so a mutation that never reaches the server does
+     * not consume a number the server will then wait for forever.
+     */
     public function append(Mutation $mutation): void;
 
-    /** The oldest mutation still awaiting acknowledgement. */
+    /** The oldest mutation still awaiting acknowledgement, with its placeholder sequence. */
     public function head(): ?Mutation;
 
-    /** One past the highest sequence ever assigned to this replica, never reused. */
-    public function nextSequence(Replica $replica): int;
+    /** The highest sequence this replica has had acknowledged. Zero when none. */
+    public function acknowledged(Replica $replica): int;
+
+    public function setAcknowledged(Replica $replica, int $sequence): void;
 
     public function acknowledge(string $mutationId): void;
-
-    /** Drops everything at or below a sequence the server says it already has. */
-    public function acknowledgeThrough(Replica $replica, int $sequence): void;
 
     /** Moves a mutation out of the queue permanently, with why. */
     public function abandon(string $mutationId, string $reason): void;
