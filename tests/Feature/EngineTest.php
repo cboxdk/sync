@@ -53,7 +53,7 @@ it('replays a lost response without any new effect', function () {
     $mutation = $this->mutation('a', 1, [Op::set('title', 'A')]);
     $first = $this->engine->process($mutation);
     foreach (range(1, 10) as $_) {
-        expect($this->engine->process($mutation))->toBe($first);
+        expect($this->engine->process($mutation))->toEqual($first);
     }
     expect($this->store->snapshot()->commits[$this->key->space])->toHaveCount(2);
 });

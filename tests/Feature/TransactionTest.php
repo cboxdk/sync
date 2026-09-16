@@ -26,7 +26,7 @@ it('rolls back domain state conflicts receipts acknowledgements and feed then sa
     expect($result->commitSequence->value)->toBe(3);
     expect($this->record()->value('body')->value())->toBe('new body');
     expect($this->openConflicts()[0]->candidates)->toHaveCount(2);
-    expect($this->engine->process($mutation))->toBe($result);
+    expect($this->engine->process($mutation))->toEqual($result);
 });
 
 it('does not expose transaction writes before commit or allow nested writes', function () {
@@ -62,6 +62,6 @@ it('freezes caller array references before journaling mutation identity', functi
     $operation = Op::set('title', 'changed');
     expect($mutation->fingerprint())->toBe($originalFingerprint);
     expect($this->store->snapshot()->receipts['a-1']->mutation->operations[0]->value->value())->toBe('first');
-    expect($this->engine->process($mutation))->toBe($first);
+    expect($this->engine->process($mutation))->toEqual($first);
     expect(fn () => $this->engine->process($this->mutation('a', 1, [$operation], 0, kind: MutationKind::Create)))->toThrow(ProtocolException::class);
 });

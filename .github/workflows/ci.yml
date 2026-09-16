@@ -42,6 +42,11 @@ jobs:
       - name: Run tests
         run: vendor/bin/pest
 
+      - name: Run tests against a store that shares no objects across commits
+        run: vendor/bin/pest
+        env:
+          SYNC_STORE: rehydrating
+
       - name: Run deterministic simulator
         run: composer simulate
 

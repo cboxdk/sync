@@ -155,7 +155,7 @@ it('recognizes retries reconstructed with equivalent values but different PHP ob
     $original = $this->mutation('a', 1, [new Op('title', $value), new Op('body', $value)], 0, kind: MutationKind::Create);
     $result = $this->engine->process($original);
     $reconstructed = $this->mutation('a', 1, [Op::set('title', 'same'), Op::set('body', 'same')], 0, kind: MutationKind::Create);
-    expect($this->engine->process($reconstructed))->toBe($result);
+    expect($this->engine->process($reconstructed))->toEqual($result);
 });
 
 it('classifies malformed candidate IDs as invalid requests before deduplication', function () {

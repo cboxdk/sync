@@ -60,7 +60,7 @@ it('rejects the whole mutation on conflict even when partial was requested', fun
     expect($result->conflicts['title']->fieldVersion->value)->toBe(2);
     expect($this->record()->value('body')->value())->toBe('body');
     expect($this->openConflicts())->toBe([]);
-    expect($this->engine->process($mutation))->toBe($result);
+    expect($this->engine->process($mutation))->toEqual($result);
     expect($this->write('b', 2, [Op::set('body', 'next')])->status)->toBe(MutationStatus::Applied);
 });
 
@@ -74,7 +74,7 @@ it('checks strict entity revision before equal target detection and records a te
     expect($result->preconditionFailure->actualVersion->value)->toBe(2);
     expect($result->acknowledgedSequence)->toBe(1);
     expect($this->record()->version->value)->toBe(2);
-    expect($this->engine->process($mutation))->toBe($result);
+    expect($this->engine->process($mutation))->toEqual($result);
     expect(fn () => $this->engine->process($this->mutation('b', 1, [Op::set('title', 'A')], expectedVersion: new RecordVersion(2))))->toThrow(ProtocolException::class);
     expect($this->engine->process($this->mutation('b', 2, [Op::set('title', 'A')], expectedVersion: new RecordVersion(2)))->status)->toBe(MutationStatus::Noop);
 });
@@ -160,7 +160,7 @@ it('validates the complete merged state and retains a typed terminal rejection',
     expect($this->record()->value('body')->value())->toBe('body');
     expect($this->record()->version->value)->toBe(2);
     expect($result->acknowledgedSequence)->toBe(1);
-    expect($this->engine->process($mutation))->toBe($result);
+    expect($this->engine->process($mutation))->toEqual($result);
     expect($this->write('b', 2, [Op::set('body', 'valid')])->status)->toBe(MutationStatus::Applied);
 });
 
@@ -212,7 +212,7 @@ it('validates resolution before closing candidates and validates create and dele
     });
     $result = $this->engine->process($this->mutation('r', 1, [Op::set('title', 'R')], 2, kind: MutationKind::Resolve, resolution: new Resolution($group->id, $group->revision, array_keys($group->candidates))));
     expect($result->status)->toBe(MutationStatus::ValidationFailed);
-    expect($this->openConflicts()[0])->toBe($group);
+    expect($this->openConflicts()[0])->toEqual($group);
     expect($this->record()->value('title')->value())->toBe('A');
     $delete = $this->engine->process($this->mutation('d', 1, [], 2, kind: MutationKind::Delete));
     expect($delete->status)->toBe(MutationStatus::ValidationFailed);

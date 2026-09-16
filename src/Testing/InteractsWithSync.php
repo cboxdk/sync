@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\Sync\Testing;
 
 use Cbox\Sync\Contracts\ConflictResolver;
+use Cbox\Sync\Data\Commit;
 use Cbox\Sync\Data\ConflictGroup;
 use Cbox\Sync\Data\EntityRecord;
 use Cbox\Sync\Data\FieldOperation;
@@ -30,9 +31,17 @@ trait InteractsWithSync
 
     protected function setUpSync(ConflictResolver $resolver = new PreserveConflict): void
     {
-        $this->store = new InMemoryStore;
+        $this->store = $this->syncStore();
         $this->engine = new Engine($this->store, $resolver, new FakeIdGenerator);
         $this->key = new EntityKey('test', 'notes', 'one');
+    }
+
+    /** Set SYNC_STORE=rehydrating to run the same suite against a store that shares no objects across commits. */
+    protected function syncStore(): InMemoryStore
+    {
+        return (getenv('SYNC_STORE') ?: 'memory') === 'rehydrating'
+            ? new RehydratingStore
+            : new InMemoryStore;
     }
 
     protected function seedRecord(): void
@@ -55,6 +64,19 @@ trait InteractsWithSync
     protected function record(): EntityRecord
     {
         return $this->store->snapshot()->records[$this->key->key()] ?? throw new \LogicException('No record in fixture');
+    }
+
+    /** @return list<Commit> */
+    protected function commits(): array
+    {
+        return $this->store->snapshot()->commits[$this->key->space] ?? [];
+    }
+
+    protected function lastCommit(): Commit
+    {
+        $commits = $this->commits();
+
+        return $commits[array_key_last($commits)] ?? throw new \LogicException('No commit in fixture');
     }
 
     /** @return list<ConflictGroup> */
