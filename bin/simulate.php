@@ -3,6 +3,7 @@
 
 declare(strict_types=1);
 
+use Cbox\Sync\Contracts\Store;
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Data\Resolution;
@@ -10,6 +11,7 @@ use Cbox\Sync\Engine;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Enums\MutationStatus;
 use Cbox\Sync\Persistence\InMemoryStore;
+use Cbox\Sync\Persistence\Pdo\PdoStore;
 use Cbox\Sync\Testing\FakeIdGenerator;
 use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\MutationSequence;
@@ -29,18 +31,73 @@ function verify(bool $condition, string $message): void
 }
 
 $seeds = [7, 42, 2026];
-if (isset($argv[1])) {
-    $seed = filter_var($argv[1], FILTER_VALIDATE_INT);
+$driver = 'memory';
+$dsn = '';
+$user = '';
+$password = '';
+foreach (array_slice($argv, 1) as $argument) {
+    if (str_starts_with($argument, '--store=')) {
+        $driver = substr($argument, 8);
+
+        continue;
+    }
+    if (str_starts_with($argument, '--dsn=')) {
+        $dsn = substr($argument, 6);
+        $driver = 'dsn';
+
+        continue;
+    }
+    if (str_starts_with($argument, '--user=')) {
+        $user = substr($argument, 7);
+
+        continue;
+    }
+    if (str_starts_with($argument, '--password=')) {
+        $password = substr($argument, 11);
+
+        continue;
+    }
+    $seed = filter_var($argument, FILTER_VALIDATE_INT);
     if ($seed === false) {
-        fwrite(STDERR, "Usage: composer simulate -- [integer-seed]\n");
+        fwrite(STDERR, "Usage: composer simulate -- [integer-seed] [--store=memory|sqlite] [--dsn=... --user=... --password=...]\n");
         exit(2);
     }
     $seeds = [$seed];
 }
+if (! in_array($driver, ['memory', 'sqlite', 'dsn'], true)) {
+    fwrite(STDERR, "Unknown store: $driver\n");
+    exit(2);
+}
+
+/** @var list<string> $temporary */
+$temporary = [];
+$makeStore = function () use ($driver, $dsn, $user, $password, &$temporary): Store {
+    if ($driver === 'memory') {
+        return new InMemoryStore;
+    }
+    if ($driver === 'dsn') {
+        $connection = new PDO($dsn, $user === '' ? null : $user, $password === '' ? null : $password);
+        $connection->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        // Each seed is an independent run, so the scratch database starts empty.
+        foreach (['sync_commits', 'sync_conflict_groups', 'sync_fields', 'sync_records', 'sync_receipts', 'sync_streams', 'sync_spaces'] as $table) {
+            $connection->exec('DROP TABLE IF EXISTS '.$table);
+        }
+        $store = new PdoStore($connection);
+        $store->migrate();
+
+        return $store;
+    }
+    $database = tempnam(sys_get_temp_dir(), 'cbox-sync-sim-').'.sqlite';
+    $temporary[] = $database;
+    $store = new PdoStore(new PDO('sqlite:'.$database));
+    $store->migrate();
+
+    return $store;
+};
 
 foreach ($seeds as $seed) {
     $random = new Randomizer(new Mt19937($seed));
-    $store = new InMemoryStore;
+    $store = $makeStore();
     $engine = new Engine($store, ids: new FakeIdGenerator);
     $entity = new EntityKey('demo', 'notes', 'shared-note');
     $engine->process(new Mutation('create', $entity, new Replica('server'), new MutationSequence(1), MutationKind::Create, new RecordVersion(0), [Op::set('title', 'initial')]));
@@ -60,8 +117,7 @@ foreach ($seeds as $seed) {
             $retries++;
         }
     }
-    $state = $store->snapshot();
-    $group = array_values($state->groups)[0] ?? throw new RuntimeException('Missing conflict group');
+    $group = $store->openGroups($entity)[0] ?? throw new RuntimeException('Missing conflict group');
     verify(count($group->candidates) === 100, 'Lost a competing proposal');
     $values = [];
     foreach ($group->candidates as $candidate) {
@@ -70,13 +126,14 @@ foreach ($seeds as $seed) {
     foreach (range(1, 100) as $client) {
         verify(in_array('proposal-'.$client, $values, true), 'Lost candidate '.$client);
     }
-    $canonical = $state->records[$entity->key()]->value('title')->value();
+    $canonical = ($store->record($entity) ?? throw new RuntimeException('Missing canonical record'))->value('title')->value();
     verify($canonical === 'proposal-'.$clients[0], 'Unexpected canonical value');
     $resolution = new Mutation('resolve', $entity, new Replica('moderator'), new MutationSequence(1), MutationKind::Resolve, new RecordVersion(2), [Op::set('title', 'chosen')], resolution: new Resolution($group->id, $group->revision, array_keys($group->candidates)));
     verify($engine->process($resolution)->status === MutationStatus::Applied, 'Resolution failed');
     $late = new Mutation('late', $entity, new Replica('late'), new MutationSequence(1), MutationKind::Update, new RecordVersion(1), [Op::set('title', 'late proposal')]);
     verify($engine->process($late)->status === MutationStatus::Conflict, 'Late proposal was lost');
-    verify(count($store->snapshot()->groups) === 2, 'Expected archived and reopened groups');
+    verify($store->group($group->id)?->isOpen() === false, 'Resolved group stayed open');
+    verify(count($store->openGroups($entity)) === 1, 'Expected exactly one reopened group');
     $cursor = 0;
     $commits = 0;
     $pages = 0;
@@ -93,4 +150,8 @@ foreach ($seeds as $seed) {
     } while ($page->hasMore);
     verify($commits === 103, 'Retries emitted extra commits');
     echo "seed={$seed}: 100/100 proposals preserved; canonical=proposal-{$clients[0]}; {$retries} retries; resolution + late candidate preserved; {$commits} whole commits / {$pages} pages. OK\n";
+}
+
+foreach ($temporary as $database) {
+    @unlink($database);
 }

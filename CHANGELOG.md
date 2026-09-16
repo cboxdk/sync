@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Durable storage
+
+- Add `Persistence\Pdo\PdoStore`, a durable adapter for SQLite, MySQL 8+ and PostgreSQL, with no runtime dependency beyond `ext-pdo`. `PdoSchema` holds the DDL for hosts that manage their own migrations.
+- Every mutation takes the space row's write lock as its first statement, which is what makes commit sequences gapless and their numbering agree with visibility order. `bin/concurrency.php` proves it with real concurrent processes.
+- The full test suite runs against the in-memory store, a store that shares no objects across commits, and SQLite, from the same fixtures. CI adds PostgreSQL and MySQL.
+- `bin/simulate.php` accepts `--store=sqlite` or `--dsn=…` and produces identical results on every adapter.
+
 ### Durable storage contract (breaking changes)
 
 - Replace the whole-state transaction workspace with `Contracts\Ledger`: one transaction scoped to one space, every read keyed, so an adapter never materializes the store. `Store::transaction()` now takes the space and is generic over the callback's return type.

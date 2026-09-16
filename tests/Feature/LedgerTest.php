@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\Sync\Contracts\Inspectable;
 use Cbox\Sync\Contracts\Ledger;
 use Cbox\Sync\Data\EntityRecord;
 use Cbox\Sync\Data\MutationResult;
@@ -33,7 +34,13 @@ it('reflects its own writes without exposing them before commit', function () {
 
         expect($ledger->record($key)?->version->value)->toBe(1);
         expect($ledger->recordChanged($key))->toBeTrue();
-        expect($this->store->record($key))->toBeNull();
+        if ($this->store instanceof Inspectable) {
+            // Reading through the store is a second observer only for the
+            // in-memory adapter; on one PDO connection it is the same
+            // transaction. PdoStoreTest proves the durable case across
+            // connections.
+            expect($this->store->record($key))->toBeNull();
+        }
 
         return new MutationResult(MutationStatus::Noop);
     });

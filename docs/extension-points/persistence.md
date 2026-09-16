@@ -1,0 +1,95 @@
+---
+title: "Persistence"
+weight: 20
+description: "Store the log durably, with gapless sequences and a proven concurrency design."
+---
+
+# Persistence
+
+Two adapters ship. `Persistence\InMemoryStore` is the reference: fast, whole-state
+inspectable, and gone at process exit. `Persistence\Pdo\PdoStore` is durable, and
+runs on SQLite, MySQL 8+ and PostgreSQL.
+
+```php
+$connection = new PDO('pgsql:host=127.0.0.1;dbname=app', 'app', $password);
+$store = new PdoStore($connection);
+$store->migrate();
+
+$engine = new Engine($store);
+```
+
+`migrate()` creates the tables if they are absent. A host that manages its own
+migrations can read the statements from `PdoSchema::statements()` instead and
+apply them however it prefers.
+
+## Why writers in a space are serialized
+
+Every mutation's first statement takes the space row's write lock
+(`SELECT … FOR UPDATE`, or `BEGIN IMMEDIATE` on SQLite), before any read. That is
+not incidental. The change feed promises two things an auto-increment column
+cannot give you:
+
+- **No gaps.** A sequence is consumed only by `Ledger::appendCommit()`. A replay,
+  a mutation gap and any exception produce no commit and consume nothing. A
+  database sequence burns numbers on rollback.
+- **Numbering that matches visibility.** Without serialization, transaction A can
+  reserve 10, B can commit 11, a reader advances past 11, and A then commits 10
+  where no reader will ever look again.
+
+The cost is one concurrent writer per space. A space is the consistency and
+ordering boundary — typically a tenant, a workspace or a user — so that is where
+the trade belongs. Writers in *different* spaces do not contend.
+
+`bin/concurrency.php` runs this as a real experiment: several OS processes, each
+with its own connection, writing one space, then checking the log is a gapless
+ascending run and every replica is fully acknowledged.
+
+```sh
+php bin/concurrency.php --writers=6 --mutations=25 --dsn="pgsql:host=127.0.0.1;dbname=scratch" --user=app --password=secret
+```
+
+## What the schema stores as columns, and what it does not
+
+Only what is queried gets a column: space, entity identity, record version,
+tombstone flag, conflict group state, mutation identity, acknowledged sequence
+and commit sequence. The immutable domain objects themselves are stored as opaque
+payloads, so the schema never has to mirror every DTO.
+
+Those payloads use PHP's own serialization. That is a storage detail of this
+adapter, not a wire format — nothing outside the database reads them, and this
+package ships no transport. A cross-language representation is a transport
+concern, and `Mutation::fingerprint()` has the same limitation today.
+
+The exception is `sync_fields`, which exists purely so a view's field equality is
+an index lookup rather than a scan. It stores a hash of the canonical field
+value, not the value, which keeps equality exact without depending on any
+database's JSON handling. Identity columns use a binary collation on every driver
+for the same reason: MySQL's default collation is case- and accent-insensitive
+and would otherwise page a bootstrap in a different order from SQLite and
+PostgreSQL.
+
+## Retention
+
+Nothing is pruned automatically. `PdoStore::prune($space, $from)` drops commits
+below a sequence and moves the horizon; sequences keep their numbers. After that,
+`retainedFrom()` reports the horizon, and a read below it raises
+`Exceptions\HistoryUnavailable`, which the view service turns into
+`ResetRequired(HistoryPruned)` so a client re-bootstraps instead of silently
+skipping history.
+
+Acknowledgement rows are one per replica per space and must not be pruned while
+that replica may return: the acknowledgement is what makes a replayed mutation
+safe.
+
+## What is proven, and what is not
+
+The whole test suite runs against all three stores — in memory, against a store
+that shares no objects across commits, and against SQLite — from the same
+fixtures, so the adapters are held to identical behaviour. CI additionally runs it
+against PostgreSQL and MySQL, along with the simulator and the concurrency
+experiment.
+
+Not proven here: crash durability under power loss, which depends on
+`synchronous_commit` and `innodb_flush_log_at_trx_commit` being configured as the
+host intends; lock-timeout tuning under heavy contention; and behaviour at
+isolation levels other than each driver's default.

@@ -1,6 +1,6 @@
 # Build status
 
-Unreleased framework-independent PHP foundation, including the architecture revision. No runtime dependencies. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync). No tagged release or package publication yet.
+Unreleased framework-independent PHP foundation. One runtime requirement, `ext-pdo`, for the durable adapter. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync). No tagged release or package publication yet.
 
 Implemented:
 
@@ -8,21 +8,24 @@ Implemented:
 - RejectOnConflict and typed strict revision/validation failures as terminal acknowledged outcomes; exceptions roll back all effects.
 - Separate trusted actor/integration context alongside replica/mutation provenance; no-op receipts without canonical version increments or data notifications.
 - Whole-entity validation inside the storage transaction, covering partial results and explicit resolution.
-- Context-bound view cursors, immutable snapshot bootstrap, whole-commit delta, explicit global deletion versus scope removal, full representations on view entry.
+- Context-bound view cursors, paginated bootstrap, whole-commit delta, explicit global deletion versus scope removal, full representations on view entry.
 - Atomic client page/cursor application with multi-view ownership, cross-view canonical version protection and retained tombstone barriers.
-- Existing ordered/idempotent streams, safe offline dependencies, tombstones, in-memory rollback and seeded N-way simulator retained.
+- Keyed `Ledger` transaction contract scoped to one space, with a one-level draft over records and groups; no engine dependence on PHP object identity.
+- Durable `PdoStore` for SQLite, MySQL 8+ and PostgreSQL: space-lock serialization, gapless commit sequences, savepoint drafts, indexed view scans, retention with a typed reset.
+- Two bootstrap strategies: frozen in-process pages with byte-identical retry, and stateless authenticated keyset tokens that any process can serve.
+- Ordered/idempotent streams, safe offline dependencies, tombstones, transactional rollback and seeded N-way simulator, now on every adapter.
 
 Verification on 2026-09-16:
 
-- Pest: 61 tests, 1,405 assertions on PHP 8.4 and 8.5.
-- Full composer qa passed: Pint, PHPStan max (source, testing fixtures and scripts), Pest, 61 dependency licenses and full locked dependency audit.
+- Pest: 88 tests, ~1,506 assertions, run three times from the same fixtures — in memory, against a store that shares no objects across commits, and against SQLite. PHP 8.4 and 8.5.
+- Full composer qa passed: Pint, PHPStan max (source, testing fixtures and scripts), all three test runs, 61 dependency licenses and full locked dependency audit.
 - Strict Composer metadata validation; SBOM and generated requirements reproduce without drift.
-- Simulator seeds 7, 42 and 2026 pass on PHP 8.4 and 8.5.
+- Simulator seeds 7, 42 and 2026 produce identical results in memory, on SQLite and over a DSN.
+- `bin/concurrency.php`: 6 OS processes writing one space produce a gapless ascending commit log with every replica fully acknowledged.
 - Executed quickstart, resolution, validator and bootstrap/delta documentation examples; relative links valid; Cbox documentation importer reports complete.
-- Independent core and views review completed. Corrected stale cross-view overwrites, tombstone resurrection by old pages, and loss of membership from older frozen snapshots. No outstanding review findings.
 
-Breaking changes are documented in CHANGELOG.md: atomic default, same-value resolution no longer increasing canonical versions, deleted feed kind, trusted processing context, new typed results and client view contracts.
+Breaking changes are documented in CHANGELOG.md: the `Ledger` transaction contract, `Store::transaction()` taking a space, `snapshot()` moving to `Contracts\Inspectable`, `ViewSyncService::bootstrap()` taking the view, conflict changes following first-touch order, and the earlier architecture revision.
 
-Limits: synchronous single-process in-memory server/client state and bootstrap sessions; no crash durability or SQL concurrency proof; no transport/wire format, webhooks or framework integration; host authentication/authorization and cross-entity locking/constraints remain required. Journal, feed, candidates and sessions are retained without compaction. Filtered deltas project canonical data only; conflict/receipt delivery requires a separately authorized adapter projection. Epoch/history reset must discard old local state and version/tombstone barriers; compatible view-filter migration can reset only the old view. Restore and durable adapters remain out of scope.
+Limits: no transport or wire format, no webhooks, no framework integration. Host authentication/authorization and cross-entity locking/constraints remain required. A space accepts one concurrent writer, by design: it is the ordering boundary. Stored payloads use PHP serialization, which is a storage detail of the reference adapter and not a cross-language format; the same is true of `Mutation::fingerprint()`. Crash durability under power loss depends on host database settings and is not proven here, nor is behaviour at non-default isolation levels or under lock-timeout tuning. Retention is available but never automatic. Filtered deltas project canonical data only; conflict/receipt delivery requires a separately authorized adapter projection. Epoch/history reset must discard old local state and version/tombstone barriers. Client-side state (`MultiViewClient`) is still in-process only. Restore remains out of scope.
 
-There are no runtime packages to audit. Composer reports an empty-package error for audit --no-dev; composer security-audit checks the entire lock file, including development tooling, instead.
+There are no third-party runtime packages to audit. Composer reports an empty-package error for audit --no-dev; composer security-audit checks the entire lock file, including development tooling, instead.

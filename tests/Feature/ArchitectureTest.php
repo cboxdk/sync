@@ -31,7 +31,7 @@ it('defaults to atomic domain application and journals every proposed field', fu
     expect($result->status)->toBe(MutationStatus::Conflict);
     expect($this->record()->value('body')->value())->toBe('body');
     expect($result->recordVersion->value)->toBe(2);
-    $receipt = $this->store->snapshot()->receipts['b-1'];
+    $receipt = $this->store->receipt('b-1');
     expect($receipt->mutation->operations)->toHaveCount(2);
     expect($receipt->mutation->operations[1]->value->value())->toBe('must not disappear');
     expect($receipt->result->acknowledgedSequence)->toBe(1);
@@ -103,12 +103,12 @@ it('passes trusted actor and integration separately through canonical conflict r
     $resolve = $this->mutation('r', 1, [Op::set('title', 'R')], 2, kind: MutationKind::Resolve, resolution: new Resolution($group->id, $group->revision, array_keys($group->candidates)));
     $this->engine->process($resolve, new AdapterContext(actorId: 'reviewer'));
     expect($this->record()->fields['title']->origin->provenance->actorId)->toBe('reviewer');
-    $commit = $this->store->snapshot()->commits['test'][3];
+    $commit = $this->commit(4);
     foreach ($commit->changes as $change) {
         expect($change->provenance->actorId)->toBe('reviewer');
         expect($change->provenance->mutationId)->toBe('r-1');
     }
-    expect($this->store->snapshot()->receipts['r-1']->provenance->actorId)->toBe('reviewer');
+    expect($this->store->receipt('r-1')->provenance->actorId)->toBe('reviewer');
     expect(fn () => $this->engine->process($resolve, new AdapterContext(actorId: 'imposter')))->toThrow(ProtocolException::class);
 });
 
@@ -118,7 +118,7 @@ it('records no-op acknowledgement without canonical changes or data notification
     expect($result->status)->toBe(MutationStatus::Noop);
     expect($result->recordVersion->value)->toBe(1);
     expect($this->record()->fields['title']->version->value)->toBe(1);
-    $changes = $this->store->snapshot()->commits['test'][1]->changes;
+    $changes = $this->commit(2)->changes;
     expect($changes)->toHaveCount(1);
     expect($changes[0]->kind)->toBe(ChangeKind::Mutation);
     expect($changes[0]->isDataChange())->toBeFalse();
@@ -135,7 +135,7 @@ it('resolves conflict metadata with an equal canonical target without a false da
     expect($this->record()->version->value)->toBe(2);
     expect($this->record()->fields['title']->version->value)->toBe(2);
     expect($this->openConflicts())->toBe([]);
-    $changes = $this->store->snapshot()->commits['test'][3]->changes;
+    $changes = $this->commit(4)->changes;
     expect(array_map(fn ($change) => $change->kind, $changes))->toBe([ChangeKind::Conflict, ChangeKind::Mutation]);
     expect(array_filter($changes, fn ($change) => $change->isDataChange()))->toBe([]);
 });
@@ -178,8 +178,8 @@ it('rejects invalid partial results and rolls back tentative conflict metadata',
     expect($result->status)->toBe(MutationStatus::ValidationFailed);
     expect($this->record()->value('body')->value())->toBe('body');
     expect($this->openConflicts())->toBe([]);
-    expect($this->store->snapshot()->receipts['b-1']->mutation->operations)->toHaveCount(2);
-    expect($this->store->snapshot()->commits['test'][2]->changes)->toHaveCount(1);
+    expect($this->store->receipt('b-1')->mutation->operations)->toHaveCount(2);
+    expect($this->commit(3)->changes)->toHaveCount(1);
 });
 
 it('rolls back all effects when a transactional validator throws', function () {
@@ -191,9 +191,9 @@ it('rolls back all effects when a transactional validator throws', function () {
             throw new TransientFailure('Adapter check unavailable');
         }
     });
-    $before = serialize($this->store->snapshot());
+    $before = $this->storeDigest();
     expect(fn () => $this->write('a', 1, [Op::set('title', 'A')]))->toThrow(TransientFailure::class);
-    expect(serialize($this->store->snapshot()))->toBe($before);
+    expect($this->storeDigest())->toBe($before);
     $this->engine = new Engine($this->store);
     expect($this->write('a', 1, [Op::set('title', 'A')])->status)->toBe(MutationStatus::Applied);
 });
@@ -220,7 +220,7 @@ it('validates resolution before closing candidates and validates create and dele
     $this->key = new EntityKey('test', 'notes', 'new');
     $create = $this->engine->process($this->mutation('c', 1, [Op::set('title', 'new')], 0, kind: MutationKind::Create));
     expect($create->status)->toBe(MutationStatus::ValidationFailed);
-    expect(isset($this->store->snapshot()->records[$this->key->key()]))->toBeFalse();
+    expect($this->store->record($this->key) !== null)->toBeFalse();
 });
 
 it('does not retain earlier preserved candidates when a later field resolver rejects', function () {
@@ -238,13 +238,13 @@ it('does not retain earlier preserved candidates when a later field resolver rej
     expect($result->conflicts)->toHaveCount(2);
     expect($result->conflictGroupIds)->toBe([]);
     expect($this->openConflicts())->toBe([]);
-    expect($this->store->snapshot()->commits['test'][2]->changes)->toHaveCount(1);
+    expect($this->commit(3)->changes)->toHaveCount(1);
 });
 
 it('represents global deletion explicitly and preserves before membership state and origin', function () {
     $this->seedRecord();
     $this->engine->process($this->mutation('d', 1, [], kind: MutationKind::Delete), new AdapterContext(actorId: 'deleter'));
-    $change = $this->store->snapshot()->commits['test'][1]->changes[0];
+    $change = $this->commit(2)->changes[0];
     expect($change->kind)->toBe(ChangeKind::Deleted);
     expect($change->isDataChange())->toBeTrue();
     expect($change->previousRecord->deleted)->toBeFalse();

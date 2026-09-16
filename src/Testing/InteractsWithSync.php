@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Cbox\Sync\Testing;
 
 use Cbox\Sync\Contracts\ConflictResolver;
+use Cbox\Sync\Contracts\Inspectable;
 use Cbox\Sync\Contracts\Ledger;
+use Cbox\Sync\Contracts\Store;
 use Cbox\Sync\Data\Commit;
 use Cbox\Sync\Data\ConflictGroup;
 use Cbox\Sync\Data\EntityRecord;
@@ -16,6 +18,7 @@ use Cbox\Sync\Data\Resolution;
 use Cbox\Sync\Engine;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Persistence\InMemoryStore;
+use Cbox\Sync\Persistence\Pdo\PdoStore;
 use Cbox\Sync\Resolvers\PreserveConflict;
 use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\MutationSequence;
@@ -24,7 +27,7 @@ use Cbox\Sync\ValueObjects\Replica;
 
 trait InteractsWithSync
 {
-    protected InMemoryStore $store;
+    protected Store $store;
 
     protected Engine $engine;
 
@@ -37,12 +40,38 @@ trait InteractsWithSync
         $this->key = new EntityKey('test', 'notes', 'one');
     }
 
-    /** Set SYNC_STORE=rehydrating to run the same suite against a store that shares no objects across commits. */
-    protected function syncStore(): InMemoryStore
+    /**
+     * SYNC_STORE selects what the suite runs against: `memory` (default),
+     * `rehydrating` for a store that shares no objects across commits, or
+     * `sqlite` for the durable PDO adapter.
+     */
+    protected function syncStore(): Store
     {
-        return (getenv('SYNC_STORE') ?: 'memory') === 'rehydrating'
-            ? new RehydratingStore
-            : new InMemoryStore;
+        return match (getenv('SYNC_STORE') ?: 'memory') {
+            'rehydrating' => new RehydratingStore,
+            'sqlite' => self::pdoStore('sqlite::memory:'),
+            'pdo' => self::pdoStore((string) (getenv('SYNC_DSN') ?: ''), (string) (getenv('SYNC_DB_USER') ?: ''), (string) (getenv('SYNC_DB_PASSWORD') ?: '')),
+            default => new InMemoryStore,
+        };
+    }
+
+    /** A schema-fresh durable store. A shared server is reset per test, which a private SQLite database does not need. */
+    protected static function pdoStore(string $dsn, string $user = '', string $password = ''): PdoStore
+    {
+        if ($dsn === '') {
+            throw new \LogicException('SYNC_DSN must be set to run the suite against a database');
+        }
+        $connection = new \PDO($dsn, $user === '' ? null : $user, $password === '' ? null : $password);
+        $connection->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        if (! str_starts_with($dsn, 'sqlite:')) {
+            foreach (['sync_commits', 'sync_conflict_groups', 'sync_fields', 'sync_records', 'sync_receipts', 'sync_streams', 'sync_spaces'] as $table) {
+                $connection->exec('DROP TABLE IF EXISTS '.$table);
+            }
+        }
+        $store = new PdoStore($connection);
+        $store->migrate();
+
+        return $store;
     }
 
     protected function seedRecord(): void
@@ -64,7 +93,7 @@ trait InteractsWithSync
 
     protected function record(): EntityRecord
     {
-        return $this->store->snapshot()->records[$this->key->key()] ?? throw new \LogicException('No record in fixture');
+        return $this->store->record($this->key) ?? throw new \LogicException('No record in fixture');
     }
 
     /**
@@ -83,7 +112,49 @@ trait InteractsWithSync
     /** @return list<Commit> */
     protected function commits(): array
     {
-        return $this->store->snapshot()->commits[$this->key->space] ?? [];
+        $commits = [];
+        $cursor = 0;
+        do {
+            $page = $this->store->pull($this->key->space, $cursor, 100);
+            foreach ($page->commits as $commit) {
+                $commits[] = $commit;
+            }
+            $cursor = $page->nextCursor->value;
+        } while ($page->hasMore);
+
+        return $commits;
+    }
+
+    protected function commit(int $sequence): Commit
+    {
+        foreach ($this->commits() as $commit) {
+            if ($commit->sequence->value === $sequence) {
+                return $commit;
+            }
+        }
+
+        throw new \LogicException('No commit '.$sequence.' in fixture');
+    }
+
+    /**
+     * A value that must not change when a transaction rolls back. An
+     * inspectable store compares its whole state, which also proves nothing
+     * about object sharing moved; any other store compares everything the
+     * contract exposes.
+     */
+    protected function storeDigest(): string
+    {
+        if ($this->store instanceof Inspectable) {
+            return serialize($this->store->snapshot());
+        }
+
+        return serialize([
+            $this->store->watermark($this->key->space),
+            $this->store->retainedFrom($this->key->space),
+            $this->commits(),
+            $this->store->record($this->key),
+            $this->store->openGroups($this->key),
+        ]);
     }
 
     protected function lastCommit(): Commit
@@ -96,6 +167,6 @@ trait InteractsWithSync
     /** @return list<ConflictGroup> */
     protected function openConflicts(): array
     {
-        return array_values(array_filter($this->store->snapshot()->groups, fn (ConflictGroup $group): bool => $group->entity->key() === $this->key->key() && $group->isOpen()));
+        return $this->store->openGroups($this->key);
     }
 }

@@ -55,7 +55,7 @@ it('replays a lost response without any new effect', function () {
     foreach (range(1, 10) as $_) {
         expect($this->engine->process($mutation))->toEqual($first);
     }
-    expect($this->store->snapshot()->commits[$this->key->space])->toHaveCount(2);
+    expect($this->commits())->toHaveCount(2);
 });
 
 it('does not advance record versions for equal values and distinguishes null from unset', function () {
@@ -114,7 +114,7 @@ it('keeps rejected stale updates after deletion and refuses implicit resurrectio
     expect($this->record()->deleted)->toBeTrue();
     $result = $this->write('b', 1, [Op::set('title', 'must survive')]);
     expect($result->reason)->toBe('entity_deleted');
-    expect($this->store->snapshot()->receipts['b-1']->mutation->operations[0]->value->value())->toBe('must survive');
+    expect($this->store->receipt('b-1')->mutation->operations[0]->value->value())->toBe('must survive');
     expect($this->engine->process($this->mutation('c', 1, [], 0, kind: MutationKind::Create))->reason)->toBe('entity_exists');
 });
 
@@ -148,7 +148,7 @@ it('requires explicit versioned resolution and preserves a late candidate', func
     $this->write('late', 1, [Op::set('title', 'late')]);
     expect($this->openConflicts())->toHaveCount(1);
     expect($this->openConflicts()[0]->candidates)->toHaveCount(2);
-    expect($this->store->snapshot()->groups[$group->id]->resolved)->toHaveCount(2);
+    expect($this->store->group($group->id)->resolved)->toHaveCount(2);
 });
 
 it('ordinary writes cannot erase open candidates and stale resolution cannot close them', function () {

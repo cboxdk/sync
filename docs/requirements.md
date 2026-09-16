@@ -10,4 +10,5 @@ These are the runtime requirements enforced by `composer.json`.
 
 | Requirement | Version |
 | --- | --- |
+| PHP extension `pdo` | `*` |
 | PHP | `^8.4` |

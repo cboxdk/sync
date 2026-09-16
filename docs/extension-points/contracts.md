@@ -23,4 +23,4 @@ Public classes are open for extension and capability interfaces can be faked or 
 
 `Views\QueryableView` is an optional capability on a view: `criteria(): RecordCriteria` describes its membership as a conjunction of exact field equalities so a store can narrow which rows it reads. Narrowing is an optimization only — the caller always re-applies `includes()`, because canonical JSON equality is stricter than any database's native JSON comparison. A view that does not implement it still works; its bootstrap just reads the space rather than an index.
 
-The engine owns protocol processing, and the host owns transport, authorization and persistence selection.
+The engine owns protocol processing, and the host owns transport, authorization and persistence selection. See [persistence](persistence.md) for the two adapters that ship and what each one proves.

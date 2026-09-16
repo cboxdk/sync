@@ -14,8 +14,8 @@ The simulator delivers 100 competing edits in deterministic random orders, loses
 
 Start with the [quickstart](docs/quickstart.md). See [architecture](docs/core-concepts/architecture.md), [protocol guarantees](docs/core-concepts/protocol.md), [conflict rules](docs/core-concepts/conflicts.md), [change feed](docs/core-concepts/change-feed.md), and [extension contracts](docs/extension-points/contracts.md).
 
-Requires PHP `^8.4`; no third-party runtime dependencies or Laravel requirement. Development tooling is Pest, Pint and PHPStan at max level. [Requirements](docs/requirements.md) are generated from Composer metadata. CI targets PHP 8.4 and 8.5.
+Requires PHP `^8.4` and `ext-pdo`; no third-party runtime dependencies or Laravel requirement. Development tooling is Pest, Pint and PHPStan at max level. [Requirements](docs/requirements.md) are generated from Composer metadata. CI targets PHP 8.4 and 8.5.
 
-The default preserves proposals, not order-independent canonical state. Storage is synchronous, single-process and lost at process exit. HTTP, SQL adapters, authentication, Laravel/Eloquent, NativePHP/SQLite, restore and compaction are outside this package. Read the [limitations](docs/security/threat-model.md) before integrating.
+The default preserves proposals, not order-independent canonical state. Storage is durable via [PdoStore](docs/extension-points/persistence.md) on SQLite, MySQL 8+ and PostgreSQL, and a space accepts one concurrent writer by design. HTTP, authentication, Laravel/Eloquent, NativePHP and restore are outside this package. Read the [limitations](docs/security/threat-model.md) before integrating.
 
 MIT, copyright Cbox. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [BUILD-STATUS.md](BUILD-STATUS.md).

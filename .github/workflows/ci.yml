@@ -47,8 +47,19 @@ jobs:
         env:
           SYNC_STORE: rehydrating
 
+      - name: Run tests against the durable SQLite adapter
+        run: vendor/bin/pest
+        env:
+          SYNC_STORE: sqlite
+
       - name: Run deterministic simulator
         run: composer simulate
+
+      - name: Run deterministic simulator on the durable adapter
+        run: php bin/simulate.php --store=sqlite
+
+      - name: Prove concurrent writers keep the log gapless
+        run: php bin/concurrency.php --writers=4 --mutations=25
 
       - name: Audit locked dependencies
         run: composer security-audit
@@ -67,3 +78,79 @@ jobs:
           composer sbom
           git diff --exit-code -- sbom.json
           test -z "$(git status --porcelain --untracked-files=all -- sbom.json)"
+
+  databases:
+    name: ${{ matrix.database }} on PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+        database: [postgres, mysql]
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: sync
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: sync
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: secret
+          MYSQL_DATABASE: sync
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping" --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          extensions: pdo_pgsql, pdo_mysql
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Resolve connection
+        id: connection
+        run: |
+          if [ "${{ matrix.database }}" = "postgres" ]; then
+            echo "dsn=pgsql:host=127.0.0.1;port=5432;dbname=sync" >> "$GITHUB_OUTPUT"
+            echo "user=sync" >> "$GITHUB_OUTPUT"
+          else
+            echo "dsn=mysql:host=127.0.0.1;port=3306;dbname=sync" >> "$GITHUB_OUTPUT"
+            echo "user=root" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run tests against the database
+        run: vendor/bin/pest
+        env:
+          SYNC_STORE: pdo
+          SYNC_DSN: ${{ steps.connection.outputs.dsn }}
+          SYNC_DB_USER: ${{ steps.connection.outputs.user }}
+          SYNC_DB_PASSWORD: secret
+
+      - name: Run deterministic simulator against the database
+        run: |
+          php bin/simulate.php \
+            --dsn="${{ steps.connection.outputs.dsn }}" \
+            --user="${{ steps.connection.outputs.user }}" \
+            --password=secret
+
+      - name: Prove concurrent writers keep the log gapless
+        run: |
+          php bin/concurrency.php --writers=6 --mutations=25 \
+            --dsn="${{ steps.connection.outputs.dsn }}" \
+            --user="${{ steps.connection.outputs.user }}" \
+            --password=secret

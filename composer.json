@@ -4,7 +4,8 @@
     "type": "library",
     "license": "MIT",
     "require": {
-        "php": "^8.4"
+        "php": "^8.4",
+        "ext-pdo": "*"
     },
     "require-dev": {
         "laravel/pint": "^1.32",
@@ -39,10 +40,15 @@
             "@lint",
             "@analyse",
             "@test",
+            "@test:rehydrating",
+            "@test:sqlite",
             "@license-check",
             "@security-audit"
         ],
         "security-audit": "@composer audit --locked",
-        "docs:requirements": "@php bin/generate-requirements.php"
+        "docs:requirements": "@php bin/generate-requirements.php",
+        "test:rehydrating": "SYNC_STORE=rehydrating pest",
+        "test:sqlite": "SYNC_STORE=sqlite pest",
+        "concurrency": "@php bin/concurrency.php"
     }
 }

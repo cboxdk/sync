@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\Sync\Tests\Fixtures;
 
+use Cbox\Sync\Contracts\Store;
 use Cbox\Sync\Data\AdapterContext;
 use Cbox\Sync\Data\FieldOperation;
 use Cbox\Sync\Data\Mutation;
@@ -19,7 +20,7 @@ class ViewScenario
 {
     private int $nextMutation = 1;
 
-    public function __construct(public InMemoryStore $store = new InMemoryStore, public ?Engine $engine = null)
+    public function __construct(public Store $store = new InMemoryStore, public ?Engine $engine = null)
     {
         $this->engine ??= new Engine($this->store);
     }
@@ -39,13 +40,13 @@ class ViewScenario
     /** @param list<FieldOperation> $operations */
     public function update(EntityKey $entity, array $operations, ?string $actor = null): void
     {
-        $record = $this->store->snapshot()->records[$entity->key()] ?? throw new \LogicException('Fixture entity is absent');
+        $record = $this->store->record($entity) ?? throw new \LogicException('Fixture entity is absent');
         $this->process($entity, MutationKind::Update, $operations, $record->version->value, $actor);
     }
 
     public function delete(EntityKey $entity, ?string $actor = null): void
     {
-        $record = $this->store->snapshot()->records[$entity->key()] ?? throw new \LogicException('Fixture entity is absent');
+        $record = $this->store->record($entity) ?? throw new \LogicException('Fixture entity is absent');
         $this->process($entity, MutationKind::Delete, [], $record->version->value, $actor);
     }
 
