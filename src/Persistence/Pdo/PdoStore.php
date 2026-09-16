@@ -30,11 +30,11 @@ use Cbox\Sync\ValueObjects\Replica;
  */
 class PdoStore implements Store
 {
-    private PdoSchema $schema;
+    protected PdoSchema $schema;
 
     private bool $active = false;
 
-    public function __construct(private \PDO $connection, ?PdoSchema $schema = null)
+    public function __construct(protected \PDO $connection, ?PdoSchema $schema = null)
     {
         $this->connection->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
         $this->schema = $schema ?? PdoSchema::forConnection($connection);
@@ -56,22 +56,41 @@ class PdoStore implements Store
         $this->ensureSpace($space);
         $this->active = true;
         try {
-            $this->connection->exec($this->schema->beginStatement());
+            $this->begin();
             try {
                 $this->lockSpace($space);
                 $result = $callback($this->ledger($space));
                 $this->beforeCommit($space);
-                $this->connection->exec('COMMIT');
+                $this->commit();
 
                 return $result;
             } catch (\Throwable $failure) {
-                $this->connection->exec('ROLLBACK');
+                $this->rollback();
 
                 throw $failure;
             }
         } finally {
             $this->active = false;
         }
+    }
+
+    /**
+     * Transaction control, separated so a host that owns its own transaction
+     * manager can drive it instead of issuing raw SQL behind its back.
+     */
+    protected function begin(): void
+    {
+        $this->connection->exec($this->schema->beginStatement());
+    }
+
+    protected function commit(): void
+    {
+        $this->connection->exec('COMMIT');
+    }
+
+    protected function rollback(): void
+    {
+        $this->connection->exec('ROLLBACK');
     }
 
     protected function ledger(string $space): Ledger
