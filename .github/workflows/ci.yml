@@ -12,7 +12,7 @@ jobs:
     name: PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/cboxdk/php-baseimages/php-cli:${{ matrix.php }}-bookworm-dev
+      image: ghcr.io/cboxdk/php-baseimages/php-cli:${{ matrix.php }}-bookworm
     strategy:
       fail-fast: false
       matrix:
@@ -83,7 +83,7 @@ jobs:
     name: ${{ matrix.database }} on PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/cboxdk/php-baseimages/php-cli:${{ matrix.php }}-bookworm-dev
+      image: ghcr.io/cboxdk/php-baseimages/php-cli:${{ matrix.php }}-bookworm
     strategy:
       fail-fast: false
       matrix:
