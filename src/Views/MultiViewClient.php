@@ -4,64 +4,58 @@ declare(strict_types=1);
 
 namespace Cbox\Sync\Views;
 
+use Cbox\Sync\Client\Contracts\ClientState;
+use Cbox\Sync\Client\InMemoryClientState;
 use Cbox\Sync\Data\EntityRecord;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\ValueObjects\EntityKey;
 
-/** In-memory client reference with atomic page/cursor application across overlapping views. */
+/**
+ * Applies bootstrap pages and deltas across overlapping views.
+ *
+ * All knowledge lives in a ClientState, so a device that is killed mid-page
+ * comes back knowing what it knew. Each page is applied inside one state
+ * transaction: records, watermarks, memberships and the cursor move together,
+ * because a cursor that advanced without its records would claim progress the
+ * local data does not have.
+ */
 class MultiViewClient
 {
-    /** @var array<string, EntityRecord> */
-    private array $records = [];
+    private ClientState $state;
 
-    /** @var array<string, int> Highest canonical revision observed, retained after deletion. */
-    private array $versions = [];
-
-    /** @var array<string, int> */
-    private array $tombstones = [];
-
-    /** @var array<string, array<string, true>> Entity key to context fingerprints. */
-    private array $memberships = [];
-
-    /** @var array<string, CursorContext> */
-    private array $contexts = [];
-
-    /** @var array<string, ViewCursor> */
-    private array $cursors = [];
-
-    /** @var array<string, string> Context fingerprint to next expected token. */
-    private array $nextBootstrapTokens = [];
-
-    /** @var array<string, array<string, true>> */
-    private array $appliedBootstrapTokens = [];
+    public function __construct(?ClientState $state = null)
+    {
+        $this->state = $state ?? new InMemoryClientState;
+    }
 
     public function applyBootstrap(BootstrapPage $page): void
     {
         $contextKey = $page->context->fingerprint();
-        if (isset($this->appliedBootstrapTokens[$contextKey][$page->token->value])) {
+        if ($this->state->bootstrapTokenApplied($contextKey, $page->token->value)) {
             return;
         }
-        if (isset($this->cursors[$contextKey])) {
+        if ($this->state->cursor($contextKey) !== null) {
             throw new InvalidRequest('Bootstrap page received after this view entered delta');
         }
-        $expected = $this->nextBootstrapTokens[$contextKey] ?? null;
+        $expected = $this->state->nextBootstrapToken($contextKey);
         if (($expected === null && $page->offset !== 0) || ($expected !== null && $expected !== $page->token->value)) {
             throw new InvalidRequest('Bootstrap page is out of order');
         }
 
-        $working = clone $this;
-        $working->contexts[$contextKey] = $page->context;
-        foreach ($page->records as $record) {
-            $working->applyRecord($contextKey, $record);
-        }
-        $working->appliedBootstrapTokens[$contextKey][$page->token->value] = true;
-        if ($page->nextToken !== null) {
-            $working->nextBootstrapTokens[$contextKey] = $page->nextToken->value;
-        } else {
-            unset($working->nextBootstrapTokens[$contextKey]);
-            $working->cursors[$contextKey] = $page->cursor ?? throw new InvalidRequest('Final bootstrap page has no cursor');
-        }
-        $this->publish($working);
+        $this->state->transaction(function () use ($page, $contextKey): void {
+            $this->state->putContext($page->context);
+            foreach ($page->records as $record) {
+                $this->applyRecord($contextKey, $record);
+            }
+            $this->state->markBootstrapTokenApplied($contextKey, $page->token->value);
+            if ($page->nextToken !== null) {
+                $this->state->setNextBootstrapToken($contextKey, $page->nextToken->value);
+
+                return;
+            }
+            $this->state->setNextBootstrapToken($contextKey, null);
+            $this->state->putCursor($page->cursor ?? throw new InvalidRequest('Final bootstrap page has no cursor'));
+        });
     }
 
     public function applyDelta(DeltaPage $page): void
@@ -70,7 +64,7 @@ class MultiViewClient
         if ($page->previousCursor->context->fingerprint() !== $contextKey) {
             throw new InvalidRequest('Delta page context mismatch');
         }
-        $current = $this->cursors[$contextKey] ?? throw new InvalidRequest('Delta received before this view completed bootstrap');
+        $current = $this->state->cursor($contextKey) ?? throw new InvalidRequest('Delta received before this view completed bootstrap');
         if ($page->cursor->position->value <= $current->position->value) {
             return;
         }
@@ -78,40 +72,45 @@ class MultiViewClient
             throw new InvalidRequest('Delta page is out of order');
         }
 
-        $working = clone $this;
-        foreach ($page->commits as $commit) {
-            if ($commit->sourceSequence->value <= $page->previousCursor->position->value || $commit->sourceSequence->value > $page->cursor->position->value) {
-                throw new InvalidRequest('Projected commit is outside the delta cursor range');
+        $this->state->transaction(function () use ($page, $contextKey): void {
+            foreach ($page->commits as $commit) {
+                if ($commit->sourceSequence->value <= $page->previousCursor->position->value || $commit->sourceSequence->value > $page->cursor->position->value) {
+                    throw new InvalidRequest('Projected commit is outside the delta cursor range');
+                }
+                foreach ($commit->changes as $change) {
+                    $this->applyChange($contextKey, $change);
+                }
             }
-            foreach ($commit->changes as $change) {
-                $working->applyChange($contextKey, $change);
-            }
-        }
-        $working->cursors[$contextKey] = $page->cursor;
-        $this->publish($working);
+            $this->state->putCursor($page->cursor);
+        });
     }
 
     public function resetView(CursorContext $context): void
     {
         $contextKey = $context->fingerprint();
-        foreach (array_keys($this->memberships) as $entityKey) {
-            unset($this->memberships[$entityKey][$contextKey]);
-            if ($this->memberships[$entityKey] === []) {
-                unset($this->memberships[$entityKey], $this->records[$entityKey]);
+        $this->state->transaction(function () use ($contextKey): void {
+            foreach ($this->state->members($contextKey) as $entity) {
+                $this->state->removeMembership($entity, $contextKey);
+                // Canonical knowledge - versions and tombstones - deliberately
+                // survives: it is what stops a later page from resurrecting
+                // something this client already saw deleted.
+                if ($this->state->memberships($entity) === []) {
+                    $this->state->forgetRecord($entity);
+                }
             }
-        }
-        unset($this->contexts[$contextKey], $this->cursors[$contextKey], $this->nextBootstrapTokens[$contextKey], $this->appliedBootstrapTokens[$contextKey]);
+            $this->state->forgetView($contextKey);
+        });
     }
 
     public function record(EntityKey $entity): ?EntityRecord
     {
-        return $this->records[$entity->key()] ?? null;
+        return $this->state->record($entity);
     }
 
     public function belongsTo(EntityKey $entity, string $viewId): bool
     {
-        foreach (array_keys($this->memberships[$entity->key()] ?? []) as $contextKey) {
-            if (($this->contexts[$contextKey] ?? null)?->viewId === $viewId) {
+        foreach ($this->state->memberships($entity) as $contextKey) {
+            if ($this->state->context($contextKey)?->viewId === $viewId) {
                 return true;
             }
         }
@@ -121,62 +120,51 @@ class MultiViewClient
 
     public function cursor(CursorContext $context): ?ViewCursor
     {
-        return $this->cursors[$context->fingerprint()] ?? null;
+        return $this->state->cursor($context->fingerprint());
     }
 
     private function applyRecord(string $contextKey, EntityRecord $record): void
     {
-        $entityKey = $record->entity->key();
+        $entity = $record->entity;
         $version = $record->version->value;
-        if ($version <= ($this->tombstones[$entityKey] ?? -1)) {
+        $tombstone = $this->state->tombstone($entity);
+        if ($tombstone !== null && $version <= $tombstone) {
             return;
         }
 
-        $this->memberships[$entityKey][$contextKey] = true;
-        if ($version < ($this->versions[$entityKey] ?? 0)) {
+        $this->state->addMembership($entity, $contextKey);
+        if ($version < $this->state->version($entity)) {
             return;
         }
 
-        $this->versions[$entityKey] = $version;
-        if ($version >= ($this->records[$entityKey]->version->value ?? 0)) {
-            $this->records[$entityKey] = $record;
+        $this->state->setVersion($entity, $version);
+        if ($version >= ($this->state->record($entity)?->version->value ?? 0)) {
+            $this->state->putRecord($record);
         }
     }
 
     private function applyChange(string $contextKey, ViewChange $change): void
     {
-        $entityKey = $change->entity->key();
+        $entity = $change->entity;
         $version = $change->recordVersion->value;
         if ($change->kind === ViewChangeKind::Upsert) {
-            $record = $change->record ?? throw new \LogicException('Upsert without record');
-            $this->applyRecord($contextKey, $record);
+            $this->applyRecord($contextKey, $change->record ?? throw new \LogicException('Upsert without record'));
 
             return;
         }
 
-        $this->versions[$entityKey] = max($version, $this->versions[$entityKey] ?? 0);
+        $this->state->setVersion($entity, max($version, $this->state->version($entity)));
         if ($change->kind === ViewChangeKind::Deleted) {
-            $this->tombstones[$entityKey] = max($version, $this->tombstones[$entityKey] ?? 0);
-            unset($this->records[$entityKey], $this->memberships[$entityKey]);
+            $this->state->setTombstone($entity, max($version, $this->state->tombstone($entity) ?? 0));
+            $this->state->forgetRecord($entity);
+            $this->state->forgetMemberships($entity);
 
             return;
         }
 
-        unset($this->memberships[$entityKey][$contextKey]);
-        if (($this->memberships[$entityKey] ?? []) === []) {
-            unset($this->memberships[$entityKey], $this->records[$entityKey]);
+        $this->state->removeMembership($entity, $contextKey);
+        if ($this->state->memberships($entity) === []) {
+            $this->state->forgetRecord($entity);
         }
-    }
-
-    private function publish(self $working): void
-    {
-        $this->records = $working->records;
-        $this->versions = $working->versions;
-        $this->tombstones = $working->tombstones;
-        $this->memberships = $working->memberships;
-        $this->contexts = $working->contexts;
-        $this->cursors = $working->cursors;
-        $this->nextBootstrapTokens = $working->nextBootstrapTokens;
-        $this->appliedBootstrapTokens = $working->appliedBootstrapTokens;
     }
 }

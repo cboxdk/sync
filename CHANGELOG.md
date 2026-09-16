@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 - 2026-09-16
+
+### Durable client state
+
+- `Views\MultiViewClient` keeps everything behind `Client\Contracts\ClientState` instead of eight private arrays, so a device that is killed mid-page comes back knowing what it knew rather than re-bootstrapping its whole dataset. Each page is applied in one state transaction: records, watermarks, memberships and the cursor move together, because a cursor that advanced without its records would claim progress the local data does not have.
+- `Client\InMemoryClientState` is the default and behaves exactly as before; `Client\Pdo\PdoClientState` is the durable one, SQLite in practice. The whole view suite runs against both from the same fixtures via `SYNC_CLIENT=sqlite`.
+- `MultiViewClient::__construct()` now takes an optional `ClientState`. **Breaking** only for anyone constructing it with arguments, which nothing did.
+- Add `Client\Outbox` over `Client\Contracts\OutboxStore`, with in-memory and PDO implementations. It owns the four outcomes every client has to get right — done, retry the same identity, resume from here, give up on this one — because getting any of them wrong is silent data loss or a wedged queue. Sequences come from a high-water mark rather than the queue, so a number is never reused after its mutation is acknowledged.
+
 ## 0.2.0 - 2026-09-16
 
 ### Security

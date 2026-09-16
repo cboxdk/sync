@@ -42,6 +42,7 @@
             "@test",
             "@test:rehydrating",
             "@test:sqlite",
+            "@test:client",
             "@license-check",
             "@security-audit"
         ],
@@ -49,6 +50,7 @@
         "docs:requirements": "@php bin/generate-requirements.php",
         "test:rehydrating": "SYNC_STORE=rehydrating pest",
         "test:sqlite": "SYNC_STORE=sqlite pest",
-        "concurrency": "@php bin/concurrency.php"
+        "concurrency": "@php bin/concurrency.php",
+        "test:client": "SYNC_CLIENT=sqlite pest"
     }
 }

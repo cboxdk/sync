@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Exceptions\InvalidRequest;
+use Cbox\Sync\Testing\ClientStateFactory;
 use Cbox\Sync\Tests\Fixtures\ViewScenario;
 use Cbox\Sync\ValueObjects\CommitSequence;
 use Cbox\Sync\Views\BootstrapToken;
@@ -34,7 +35,7 @@ it('converges from a frozen paginated bootstrap through concurrent membership an
         ->and($page->cursor)->toBeNull()
         ->and($page->nextToken)->not->toBeNull();
 
-    $client = new MultiViewClient;
+    $client = new MultiViewClient(ClientStateFactory::make());
     expect($page->context->fingerprint())->toBe($sync->context('test', $view)->fingerprint());
     $client->applyBootstrap($page);
     $e = $scenario->create('e', 'alpha', actor: 'actor-new');
@@ -161,7 +162,7 @@ it('retains an entity removed from one local view while another view still owns 
     $sync = new ViewSyncService($scenario->store, '1', 'one');
     $projectBootstrap = $sync->bootstrap($sync->context('test', $project), $project, $sync->openBootstrap($sync->context('test', $project), $project));
     $openBootstrap = $sync->bootstrap($sync->context('test', $open), $open, $sync->openBootstrap($sync->context('test', $open), $open));
-    $client = new MultiViewClient;
+    $client = new MultiViewClient(ClientStateFactory::make());
     $client->applyBootstrap($projectBootstrap);
     $client->applyBootstrap($openBootstrap);
 
@@ -189,7 +190,7 @@ it('keeps the newest canonical record when overlapping views catch up in a diffe
     $sync = new ViewSyncService($scenario->store, '1', 'one');
     $projectBootstrap = $sync->bootstrap($sync->context('test', $project), $project, $sync->openBootstrap($sync->context('test', $project), $project));
     $openBootstrap = $sync->bootstrap($sync->context('test', $open), $open, $sync->openBootstrap($sync->context('test', $open), $open));
-    $client = new MultiViewClient;
+    $client = new MultiViewClient(ClientStateFactory::make());
     $client->applyBootstrap($projectBootstrap);
     $client->applyBootstrap($openBootstrap);
 
@@ -226,7 +227,7 @@ it('registers membership from an older frozen view without regressing canonical 
     $sync = new ViewSyncService($scenario->store, '1', 'one');
     $projectBootstrap = $sync->bootstrap($sync->context('test', $project), $project, $sync->openBootstrap($sync->context('test', $project), $project));
     $openBootstrap = $sync->bootstrap($sync->context('test', $open), $open, $sync->openBootstrap($sync->context('test', $open), $open));
-    $client = new MultiViewClient;
+    $client = new MultiViewClient(ClientStateFactory::make());
     $client->applyBootstrap($projectBootstrap);
 
     $scenario->update($entity, [Op::set('title', 'version-2')]);
@@ -257,7 +258,7 @@ it('does not resurrect a tombstone when a slower view delivers an older upsert',
     $sync = new ViewSyncService($scenario->store, '1', 'one');
     $projectBootstrap = $sync->bootstrap($sync->context('test', $project), $project, $sync->openBootstrap($sync->context('test', $project), $project));
     $openBootstrap = $sync->bootstrap($sync->context('test', $open), $open, $sync->openBootstrap($sync->context('test', $open), $open));
-    $client = new MultiViewClient;
+    $client = new MultiViewClient(ClientStateFactory::make());
     $client->applyBootstrap($projectBootstrap);
     $client->applyBootstrap($openBootstrap);
 
@@ -280,7 +281,7 @@ it('binds client application to page context and atomically deduplicates each vi
     $other = FieldEqualsView::matching('open', 'v1', 'status', 'open');
     $sync = new ViewSyncService($scenario->store, '1', 'one');
     $bootstrap = $sync->bootstrap($sync->context('test', $view), $view, $sync->openBootstrap($sync->context('test', $view), $view));
-    $client = new MultiViewClient;
+    $client = new MultiViewClient(ClientStateFactory::make());
     $client->applyBootstrap($bootstrap);
     $client->applyBootstrap($bootstrap);
     $otherSpaceBootstrap = $sync->bootstrap($sync->context('other-space', $view), $view, $sync->openBootstrap($sync->context('other-space', $view), $view));
