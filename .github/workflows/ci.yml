@@ -11,6 +11,8 @@ jobs:
   quality:
     name: PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/cboxdk/php-baseimages/php-cli:${{ matrix.php }}-bookworm-dev
     strategy:
       fail-fast: false
       matrix:
@@ -19,13 +21,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
-      - name: Set up PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          coverage: none
-          tools: composer:v2
 
       - name: Validate Composer metadata
         run: composer validate --strict
@@ -87,6 +82,8 @@ jobs:
   databases:
     name: ${{ matrix.database }} on PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/cboxdk/php-baseimages/php-cli:${{ matrix.php }}-bookworm-dev
     strategy:
       fail-fast: false
       matrix:
@@ -116,14 +113,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          coverage: none
-          extensions: pdo_pgsql, pdo_mysql
-          tools: composer:v2
-
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
@@ -131,10 +120,10 @@ jobs:
         id: connection
         run: |
           if [ "${{ matrix.database }}" = "postgres" ]; then
-            echo "dsn=pgsql:host=127.0.0.1;port=5432;dbname=sync" >> "$GITHUB_OUTPUT"
+            echo "dsn=pgsql:host=postgres;port=5432;dbname=sync" >> "$GITHUB_OUTPUT"
             echo "user=sync" >> "$GITHUB_OUTPUT"
           else
-            echo "dsn=mysql:host=127.0.0.1;port=3306;dbname=sync" >> "$GITHUB_OUTPUT"
+            echo "dsn=mysql:host=mysql;port=3306;dbname=sync" >> "$GITHUB_OUTPUT"
             echo "user=root" >> "$GITHUB_OUTPUT"
           fi
 
