@@ -76,7 +76,18 @@ class Engine
                 $ledger->beginDraft();
                 $outcome = $this->apply($ledger, $mutation, $record, $knowledge, $context);
                 $proposed = $ledger->record($mutation->entity);
-                if ($proposed !== null && in_array($outcome->status, [MutationStatus::Applied, MutationStatus::Partial, MutationStatus::Noop], true)) {
+                // Whatever is about to be committed is validated, rather than a
+                // list of statuses someone has to remember to extend. Conflict
+                // was missing from that list: a preserved candidate is stored
+                // state, and it was reaching the database without the host's
+                // validator - and so without the authorization re-check that
+                // decorates it - on the one path this package exists for.
+                //
+                // Rejected is the only outcome here that never reaches storage,
+                // so it is the only one worth skipping. Keeping the condition
+                // the exact inverse of the rollback below is what stops the two
+                // drifting apart again.
+                if ($proposed !== null && $outcome->status !== MutationStatus::Rejected) {
                     $validation = $this->validator->validate(new ValidationContext($record, $proposed, $mutation, $origin));
                     if (! $validation->isValid()) {
                         $outcome = new MutationResult(MutationStatus::ValidationFailed, $actualVersion,
