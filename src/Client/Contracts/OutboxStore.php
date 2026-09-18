@@ -25,13 +25,23 @@ interface OutboxStore
      */
     public function append(Mutation $mutation): void;
 
-    /** The oldest mutation still awaiting acknowledgement, with its placeholder sequence. */
-    public function head(): ?Mutation;
+    /**
+     * The oldest mutation still awaiting acknowledgement, with its placeholder
+     * sequence. Narrowed to one entity type when given, because a push names
+     * one type and must not send another type's queued work as that type.
+     */
+    public function head(?string $entityType = null): ?Mutation;
 
-    /** The highest sequence this replica has had acknowledged. Zero when none. */
-    public function acknowledged(Replica $replica): int;
+    /**
+     * The highest sequence acknowledged for this replica IN THIS SPACE.
+     *
+     * The server keys an acknowledgement stream by space and replica together,
+     * so a device writing to two spaces has two independent streams. A single
+     * per-replica counter would send space B a number it has never seen.
+     */
+    public function acknowledged(Replica $replica, string $space): int;
 
-    public function setAcknowledged(Replica $replica, int $sequence): void;
+    public function setAcknowledged(Replica $replica, string $space, int $sequence): void;
 
     public function acknowledge(string $mutationId): void;
 
@@ -41,7 +51,7 @@ interface OutboxStore
     /** @return list<array{mutation: Mutation, reason: string}> */
     public function abandoned(): array;
 
-    public function pending(): int;
+    public function pending(?string $entityType = null): int;
 
     /**
      * @template TResult

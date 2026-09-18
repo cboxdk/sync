@@ -34,4 +34,15 @@ class State
 
     /** @var array<string, int> Lowest retained sequence per space, once history has been pruned */
     public array $retainedFrom = [];
+
+    /**
+     * Highest sequence ever assigned per space.
+     *
+     * Kept separately from the commits themselves: derived from retained
+     * history it would rewind when history is pruned, and the next mutation
+     * would reuse a number a client had already consumed.
+     *
+     * @var array<string, int>
+     */
+    public array $watermark = [];
 }

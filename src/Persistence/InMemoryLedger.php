@@ -67,9 +67,7 @@ class InMemoryLedger implements Ledger
 
     public function watermark(): CommitSequence
     {
-        $commits = $this->state->commits[$this->space] ?? [];
-
-        return $commits === [] ? new CommitSequence : $commits[count($commits) - 1]->sequence;
+        return new CommitSequence($this->state->watermark[$this->space] ?? 0);
     }
 
     public function putRecord(EntityRecord $record): void
@@ -106,6 +104,7 @@ class InMemoryLedger implements Ledger
         }
         $commit = new Commit($this->space, $sequence, $changes);
         $this->state->commits[$this->space][] = $commit;
+        $this->state->watermark[$this->space] = $sequence->value;
 
         return $commit;
     }

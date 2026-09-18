@@ -226,7 +226,16 @@ class PdoStore implements Store
             $bindings[] = $criteria->entityType;
         }
         foreach ($criteria === null ? [] : $criteria->predicates as $predicate) {
-            $sql .= ' AND EXISTS (SELECT 1 FROM sync_fields f WHERE f.space = sync_records.space AND f.entity_type = sync_records.entity_type AND f.entity_id = sync_records.entity_id AND f.field = ? AND f.value_hash = ?)';
+            $row = 'FROM sync_fields f WHERE f.space = sync_records.space AND f.entity_type = sync_records.entity_type AND f.entity_id = sync_records.entity_id AND f.field = ?';
+            if ($predicate->expected->exists) {
+                $sql .= ' AND EXISTS (SELECT 1 '.$row.' AND f.value_hash = ?)';
+            } else {
+                // "has no value" must also match a field that was never set,
+                // which has no row at all. Asserting a matching row would miss
+                // exactly those records, and a bootstrap that omits them still
+                // advances its cursor - so the delta never repairs it either.
+                $sql .= ' AND NOT EXISTS (SELECT 1 '.$row.' AND f.value_hash <> ?)';
+            }
             $bindings[] = $predicate->field;
             $bindings[] = Payload::fieldHash($predicate->expected);
         }

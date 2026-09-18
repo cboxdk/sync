@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed (breaking)
+
+- **The outbox is keyed by entity type and space, not by replica alone.** `head()` takes an optional entity type, and acknowledgement counters are per (replica, space) because that is how the server keys a stream. Two defects fall out of the old shape: a push naming one type drained the whole queue and submitted other types' writes as that type, and a device writing to a second space offered it a sequence number that space had never seen, wedging it. **Breaking:** `OutboxStore::head()`, `acknowledged()`, `setAcknowledged()` and `pending()` changed signature, and `Outbox::resumeAfter()` now takes the mutation whose answer it is acting on.
+- `PdoStore::scanRecords()` matches a field that was never set. A predicate expecting no value required a `sync_fields` row to exist, so SQLite silently omitted exactly those records while the in-memory store returned them - and a bootstrap that omits a record still advances its cursor, so the delta never repaired it.
+- The in-memory watermark no longer derives from retained commits. Pruning all history rewound it to zero and the next mutation reused a sequence a client had already consumed. It is now tracked per space, as the durable adapter already did.
+
 ### Tests
 
 - Adds `NestedDataTest` and `RelationsTest`, pinning what field-level conflict detection actually means for nested documents and for entities that reference each other: nothing merges inside a field, a reordered object is the same value, an empty object and an empty array stay distinct at depth, a stale write to an untouched field still applies, a delete leaves a tombstone rather than a hole so following a reference reads a dead record, and a record survives leaving one view while another still owns it.

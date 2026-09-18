@@ -77,9 +77,9 @@ class Outbox
      * wait for that number forever and every later write would come back as a
      * gap. Numbering at send time makes that hole impossible.
      */
-    public function head(): ?Mutation
+    public function head(?string $entityType = null): ?Mutation
     {
-        $mutation = $this->store->head();
+        $mutation = $this->store->head($entityType);
         if ($mutation === null) {
             return null;
         }
@@ -88,7 +88,7 @@ class Outbox
             $mutation->id,
             $mutation->entity,
             $mutation->replica,
-            new MutationSequence($this->store->acknowledged($this->replica) + 1),
+            new MutationSequence($this->store->acknowledged($this->replica, $mutation->entity->space) + 1),
             $mutation->kind,
             $mutation->baseVersion,
             $mutation->operations,
@@ -99,16 +99,16 @@ class Outbox
         );
     }
 
-    public function pending(): int
+    public function pending(?string $entityType = null): int
     {
-        return $this->store->pending();
+        return $this->store->pending($entityType);
     }
 
     /** The server processed it. Whether it applied, conflicted or was rejected, it is done. */
     public function acknowledged(Mutation $mutation): void
     {
         $this->store->transaction(function () use ($mutation): void {
-            $this->store->setAcknowledged($this->replica, $mutation->sequence->value);
+            $this->store->setAcknowledged($this->replica, $mutation->entity->space, $mutation->sequence->value);
             $this->store->acknowledge($mutation->id);
         });
     }
@@ -121,9 +121,14 @@ class Outbox
      * numbers from where the server says it is. Clearing the queue here would
      * discard writes the server never received.
      */
-    public function resumeAfter(int $acknowledgedSequence): void
+    /**
+     * The space comes from the mutation the server answered about, because an
+     * acknowledgement stream belongs to one space and a device may be writing
+     * to several.
+     */
+    public function resumeAfter(Mutation $mutation, int $acknowledgedSequence): void
     {
-        $this->store->setAcknowledged($this->replica, $acknowledgedSequence);
+        $this->store->setAcknowledged($this->replica, $mutation->entity->space, $acknowledgedSequence);
     }
 
     /**

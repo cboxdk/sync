@@ -145,14 +145,12 @@ class InMemoryStore implements Inspectable, Store
 
     public function watermark(string $space): CommitSequence
     {
-        $commits = $this->state->commits[$space] ?? [];
-
-        return $commits === [] ? new CommitSequence : $commits[count($commits) - 1]->sequence;
+        return new CommitSequence($this->state->watermark[$space] ?? 0);
     }
 
     public function retainedFrom(string $space): CommitSequence
     {
-        if (($this->state->commits[$space] ?? []) === []) {
+        if (($this->state->watermark[$space] ?? 0) === 0) {
             return new CommitSequence;
         }
 

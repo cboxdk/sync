@@ -27,19 +27,31 @@ class InMemoryOutboxStore implements OutboxStore
         $this->queue[] = $mutation;
     }
 
-    public function head(): ?Mutation
+    public function head(?string $entityType = null): ?Mutation
     {
-        return $this->queue[0] ?? null;
+        foreach ($this->queue as $mutation) {
+            if ($entityType === null || $mutation->entity->type === $entityType) {
+                return $mutation;
+            }
+        }
+
+        return null;
     }
 
-    public function acknowledged(Replica $replica): int
+    public function acknowledged(Replica $replica, string $space): int
     {
-        return $this->acknowledged[$replica->id] ?? 0;
+        return $this->acknowledged[self::stream($replica, $space)] ?? 0;
     }
 
-    public function setAcknowledged(Replica $replica, int $sequence): void
+    public function setAcknowledged(Replica $replica, string $space, int $sequence): void
     {
-        $this->acknowledged[$replica->id] = max($sequence, $this->acknowledged[$replica->id] ?? 0);
+        $key = self::stream($replica, $space);
+        $this->acknowledged[$key] = max($sequence, $this->acknowledged[$key] ?? 0);
+    }
+
+    private static function stream(Replica $replica, string $space): string
+    {
+        return $space."\0".$replica->id;
     }
 
     public function acknowledge(string $mutationId): void
@@ -62,9 +74,13 @@ class InMemoryOutboxStore implements OutboxStore
         return $this->abandoned;
     }
 
-    public function pending(): int
+    public function pending(?string $entityType = null): int
     {
-        return count($this->queue);
+        if ($entityType === null) {
+            return count($this->queue);
+        }
+
+        return count(array_filter($this->queue, fn (Mutation $m): bool => $m->entity->type === $entityType));
     }
 
     public function transaction(\Closure $callback): mixed

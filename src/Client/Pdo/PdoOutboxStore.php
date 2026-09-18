@@ -32,6 +32,8 @@ class PdoOutboxStore implements OutboxStore
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS sync_outbox (
             mutation_id $name NOT NULL,
             replica_id $name NOT NULL,
+            space $name NOT NULL,
+            entity_type $name NOT NULL,
             queued_at BIGINT NOT NULL,
             payload $text NOT NULL,
             abandoned_reason $text NULL,
@@ -39,37 +41,44 @@ class PdoOutboxStore implements OutboxStore
         )");
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS sync_outbox_sequences (
             replica_id $name NOT NULL,
+            space $name NOT NULL,
             assigned BIGINT NOT NULL,
-            PRIMARY KEY (replica_id)
+            PRIMARY KEY (replica_id, space)
         )");
     }
 
     public function append(Mutation $mutation): void
     {
         $position = (int) ($this->scalar('SELECT COALESCE(MAX(queued_at), 0) FROM sync_outbox', []) ?? '0') + 1;
-        $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, queued_at, payload, abandoned_reason) VALUES (?, ?, ?, ?, NULL)', [
-            $mutation->id, $mutation->replica->id, $position, Payload::encode($mutation),
+        $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, queued_at, payload, abandoned_reason) VALUES (?, ?, ?, ?, ?, ?, NULL)', [
+            $mutation->id, $mutation->replica->id, $mutation->entity->space, $mutation->entity->type, $position, Payload::encode($mutation),
         ]);
     }
 
-    public function head(): ?Mutation
+    public function head(?string $entityType = null): ?Mutation
     {
-        $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE abandoned_reason IS NULL ORDER BY queued_at, mutation_id LIMIT 1', []);
+        $sql = 'SELECT payload FROM sync_outbox WHERE abandoned_reason IS NULL';
+        $bindings = [];
+        if ($entityType !== null) {
+            $sql .= ' AND entity_type = ?';
+            $bindings[] = $entityType;
+        }
+        $payload = $this->scalar($sql.' ORDER BY queued_at, mutation_id LIMIT 1', $bindings);
 
         return $payload === null ? null : Payload::decode($payload, Mutation::class);
     }
 
-    public function acknowledged(Replica $replica): int
+    public function acknowledged(Replica $replica, string $space): int
     {
-        return (int) ($this->scalar('SELECT assigned FROM sync_outbox_sequences WHERE replica_id = ?', [$replica->id]) ?? '0');
+        return (int) ($this->scalar('SELECT assigned FROM sync_outbox_sequences WHERE replica_id = ? AND space = ?', [$replica->id, $space]) ?? '0');
     }
 
-    public function setAcknowledged(Replica $replica, int $sequence): void
+    public function setAcknowledged(Replica $replica, string $space, int $sequence): void
     {
-        if ($this->scalar('SELECT 1 FROM sync_outbox_sequences WHERE replica_id = ?', [$replica->id]) === null) {
-            $this->run('INSERT INTO sync_outbox_sequences (replica_id, assigned) VALUES (?, 0)', [$replica->id]);
+        if ($this->scalar('SELECT 1 FROM sync_outbox_sequences WHERE replica_id = ? AND space = ?', [$replica->id, $space]) === null) {
+            $this->run('INSERT INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0)', [$replica->id, $space]);
         }
-        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND assigned < ?', [$sequence, $replica->id, $sequence]);
+        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ? AND assigned < ?', [$sequence, $replica->id, $space, $sequence]);
     }
 
     public function acknowledge(string $mutationId): void
@@ -97,9 +106,13 @@ class PdoOutboxStore implements OutboxStore
         return $rows;
     }
 
-    public function pending(): int
+    public function pending(?string $entityType = null): int
     {
-        return (int) ($this->scalar('SELECT COUNT(*) FROM sync_outbox WHERE abandoned_reason IS NULL', []) ?? '0');
+        if ($entityType === null) {
+            return (int) ($this->scalar('SELECT COUNT(*) FROM sync_outbox WHERE abandoned_reason IS NULL', []) ?? '0');
+        }
+
+        return (int) ($this->scalar('SELECT COUNT(*) FROM sync_outbox WHERE abandoned_reason IS NULL AND entity_type = ?', [$entityType]) ?? '0');
     }
 
     public function transaction(\Closure $callback): mixed
