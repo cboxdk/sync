@@ -65,7 +65,7 @@ class InMemoryStore implements Inspectable, Store
         return clone $this->state;
     }
 
-    public function commitsAfter(string $space, int $after, int $limit): array
+    public function commitsAfter(string $space, int $after, int $limit, ?string $entityType = null): array
     {
         if ($after < 0 || $limit < 1) {
             throw new InvalidRequest('Invalid commit cursor or budget');
@@ -81,6 +81,12 @@ class InMemoryStore implements Inspectable, Store
             }
             if (count($commits) === $limit) {
                 break;
+            }
+            // Null means the type is unknown for this commit, which is not the
+            // same as "does not match": it still has to be delivered.
+            $type = $commit->entityType();
+            if ($entityType !== null && $type !== null && $type !== $entityType) {
+                continue;
             }
             $commits[] = $commit;
         }

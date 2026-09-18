@@ -49,19 +49,32 @@ class PdoSchema
         foreach ($this->tables() as $table) {
             $statements[] = $this->createTable($table);
         }
-        // MySQL has no CREATE INDEX IF NOT EXISTS, so its indexes are declared
-        // inside CREATE TABLE IF NOT EXISTS, which is idempotent as a whole.
-        if ($this->driver !== self::MYSQL) {
-            foreach ($this->tables() as $table) {
-                foreach ($table['indexes'] as $index) {
-                    $statements[] = sprintf(
-                        'CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)',
-                        $index['unique'] ? 'UNIQUE ' : '',
-                        $index['name'],
-                        $table['name'],
-                        implode(', ', $index['columns']),
-                    );
-                }
+
+        return array_merge($statements, $this->indexStatements());
+    }
+
+    /**
+     * MySQL has no CREATE INDEX IF NOT EXISTS, so its indexes are declared
+     * inside CREATE TABLE IF NOT EXISTS, which is idempotent as a whole.
+     *
+     * @return list<string>
+     */
+    private function indexStatements(): array
+    {
+        if ($this->driver === self::MYSQL) {
+            return [];
+        }
+
+        $statements = [];
+        foreach ($this->tables() as $table) {
+            foreach ($table['indexes'] as $index) {
+                $statements[] = sprintf(
+                    'CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)',
+                    $index['unique'] ? 'UNIQUE ' : '',
+                    $index['name'],
+                    $table['name'],
+                    implode(', ', $index['columns']),
+                );
             }
         }
 
@@ -70,9 +83,99 @@ class PdoSchema
 
     public function install(\PDO $connection): void
     {
-        foreach ($this->statements() as $statement) {
+        foreach ($this->tables() as $table) {
+            $connection->exec($this->createTable($table));
+        }
+
+        // Between the tables and the indexes, because an index over a column
+        // this installation predates cannot be created before the column is.
+        //
+        // CREATE TABLE IF NOT EXISTS does nothing to a table that already
+        // exists, so without this an older installation would keep running
+        // against a schema the adapter can no longer write to. Reconciling here
+        // means a host upgrading the package needs no migration of its own,
+        // including one using the bare PDO adapter with no framework at all.
+        $this->addMissingColumns($connection);
+
+        foreach ($this->indexStatements() as $statement) {
             $connection->exec($statement);
         }
+        $this->addMissingIndexes($connection);
+    }
+
+    private function addMissingColumns(\PDO $connection): void
+    {
+        foreach ($this->tables() as $table) {
+            $existing = $this->columnNames($connection, $table['name']);
+            foreach ($table['columns'] as $definition) {
+                $column = (string) strtok($definition, ' ');
+                if ($column === '' || in_array(strtolower($column), $existing, true)) {
+                    continue;
+                }
+                // A NOT NULL column with no default cannot be added to a table
+                // holding rows. Refusing by name beats a driver error that does
+                // not say which column or why.
+                if (stripos($definition, ' NOT NULL') !== false && stripos($definition, ' DEFAULT ') === false) {
+                    throw new InvalidRequest(sprintf(
+                        'Table %s is missing column %s, which is NOT NULL with no default; adding it to a table that already holds rows needs a migration that backfills it.',
+                        $table['name'],
+                        $column,
+                    ));
+                }
+                $connection->exec(sprintf('ALTER TABLE %s ADD COLUMN %s', $table['name'], $definition));
+            }
+        }
+    }
+
+    private function addMissingIndexes(\PDO $connection): void
+    {
+        // Everyone else got CREATE INDEX IF NOT EXISTS in statements(). MySQL
+        // declares its indexes inside CREATE TABLE, which is exactly the part
+        // an existing table skips.
+        if ($this->driver !== self::MYSQL) {
+            return;
+        }
+
+        foreach ($this->tables() as $table) {
+            foreach ($table['indexes'] as $index) {
+                $lookup = $connection->prepare(
+                    'SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? LIMIT 1'
+                );
+                $lookup->execute([$table['name'], $index['name']]);
+                if ($lookup->fetchColumn() !== false) {
+                    continue;
+                }
+                $connection->exec(sprintf(
+                    'ALTER TABLE %s ADD %sINDEX %s (%s)',
+                    $table['name'],
+                    $index['unique'] ? 'UNIQUE ' : '',
+                    $index['name'],
+                    implode(', ', $index['columns']),
+                ));
+            }
+        }
+    }
+
+    /** @return list<string> Lowercased, because drivers disagree on the case they report. */
+    private function columnNames(\PDO $connection, string $table): array
+    {
+        [$sql, $bindings] = match ($this->driver) {
+            self::SQLITE => ['SELECT name FROM pragma_table_info(?)', [$table]],
+            self::MYSQL => ['SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [$table]],
+            default => ['SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?', [$table]],
+        };
+
+        $statement = $connection->prepare($sql);
+        $statement->execute($bindings);
+
+        $names = [];
+        foreach ($statement->fetchAll(\PDO::FETCH_COLUMN) as $name) {
+            if (is_string($name)) {
+                $names[] = strtolower($name);
+            }
+        }
+
+        return $names;
     }
 
     /**
@@ -190,10 +293,17 @@ class PdoSchema
                 'columns' => [
                     "space $name NOT NULL",
                     'sequence BIGINT NOT NULL',
+                    // Nullable on purpose: rows written before this column
+                    // existed carry NULL, and a reader narrowing by type has to
+                    // treat that as "unknown" and still deliver them. Backfilling
+                    // would mean decoding every commit a host has ever stored.
+                    "entity_type $name NULL",
                     "payload $text NOT NULL",
                 ],
                 'primaryKey' => ['space', 'sequence'],
-                'indexes' => [],
+                'indexes' => [
+                    ['name' => 'sync_commits_type', 'unique' => false, 'columns' => ['space', 'entity_type', 'sequence']],
+                ],
             ],
         ];
     }

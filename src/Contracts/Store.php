@@ -36,11 +36,21 @@ interface Store
      * Commits in the space ordered by sequence, strictly after $after, at most
      * $limit of them. A commit budget, unlike pull()'s change budget.
      *
+     * $entityType narrows the read to commits on that entity type. It is an
+     * optimization, not a filter the caller may rely on for correctness: a
+     * store that cannot narrow, or a commit whose type it never recorded, must
+     * return the commit and let the caller decide. Without it a view matching
+     * one type of a busy tenant pays to decode every other type's writes on
+     * every poll, per device.
+     *
+     * Narrowing must not change $limit's meaning: the budget counts commits
+     * returned, so a caller's hasMore is still answered by asking for one more.
+     *
      * @return list<Commit>
      *
      * @throws HistoryUnavailable when $after is below the retention horizon
      */
-    public function commitsAfter(string $space, int $after, int $limit): array;
+    public function commitsAfter(string $space, int $after, int $limit, ?string $entityType = null): array;
 
     /**
      * Live records in the space, excluding tombstones, ordered by entity type

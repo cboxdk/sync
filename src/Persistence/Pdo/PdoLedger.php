@@ -138,7 +138,10 @@ class PdoLedger implements Ledger
             throw new ProtocolException('Commit sequence must be the watermark plus one');
         }
         $commit = new Commit($this->space, $sequence, $changes);
-        $this->run('INSERT INTO sync_commits (space, sequence, payload) VALUES (?, ?, ?)', [$this->space, $sequence->value, Payload::encode($commit)]);
+        $this->run(
+            'INSERT INTO sync_commits (space, sequence, entity_type, payload) VALUES (?, ?, ?, ?)',
+            [$this->space, $sequence->value, $commit->entityType(), Payload::encode($commit)],
+        );
         $this->run('UPDATE sync_spaces SET commit_sequence = ? WHERE space = ?', [$sequence->value, $this->space]);
 
         return $commit;

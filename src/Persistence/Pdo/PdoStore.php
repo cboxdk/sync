@@ -214,13 +214,13 @@ class PdoStore implements Store
         });
     }
 
-    public function commitsAfter(string $space, int $after, int $limit): array
+    public function commitsAfter(string $space, int $after, int $limit, ?string $entityType = null): array
     {
         if ($after < 0 || $limit < 1) {
             throw new InvalidRequest('Invalid commit cursor or budget');
         }
         $this->guardHorizon($space, $after);
-        $commits = $this->commitRows($space, $after, $limit);
+        $commits = $this->commitRows($space, $after, $limit, $entityType);
         // Re-checked after the read. A prune between the first check and the
         // query removes commits the reader then never sees, and it would
         // advance its cursor past them as though they had been delivered.
@@ -305,12 +305,17 @@ class PdoStore implements Store
     }
 
     /** @return list<Commit> */
-    private function commitRows(string $space, int $after, int $limit): array
+    private function commitRows(string $space, int $after, int $limit, ?string $entityType = null): array
     {
-        $rows = $this->select(
-            'SELECT payload FROM sync_commits WHERE space = ? AND sequence > ? ORDER BY sequence LIMIT '.$limit,
-            [$space, $after],
-        );
+        $sql = 'SELECT payload FROM sync_commits WHERE space = ? AND sequence > ?';
+        $bindings = [$space, $after];
+        if ($entityType !== null) {
+            // A row written before entity_type existed has no type to compare,
+            // and skipping it would silently drop history the reader is owed.
+            $sql .= ' AND (entity_type = ? OR entity_type IS NULL)';
+            $bindings[] = $entityType;
+        }
+        $rows = $this->select($sql.' ORDER BY sequence LIMIT '.$limit, $bindings);
         $commits = [];
         foreach ($rows as $row) {
             $commits[] = Payload::decode($row, Commit::class);

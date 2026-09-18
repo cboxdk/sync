@@ -74,9 +74,18 @@ class ViewSyncService
             throw new ResetRequired(ResetReason::CursorAhead);
         }
 
+        // Read before the commits, so a write landing in between is left for
+        // the next poll rather than skipped by an over-advanced cursor.
+        $watermark = $this->store->watermark($space)->value;
+
+        // A view bound to one entity type has no interest in another type's
+        // writes, and decoding them is the dominant cost of a poll on a busy
+        // tenant. The store may ignore the hint; includes() still decides.
+        $narrowTo = $view instanceof QueryableView ? $view->criteria()->entityType : null;
+
         try {
             // One extra commit answers hasMore without a second query.
-            $available = $this->store->commitsAfter($space, $cursor->position->value, $commitBudget + 1);
+            $available = $this->store->commitsAfter($space, $cursor->position->value, $commitBudget + 1, $narrowTo);
         } catch (HistoryUnavailable) {
             throw new ResetRequired(ResetReason::HistoryPruned);
         }
@@ -91,6 +100,14 @@ class ViewSyncService
                 $projected[] = new ViewCommit($commit->sequence, $changes);
             }
             $position = $commit->sequence->value;
+        }
+
+        // Nothing further matched, so everything up to the watermark read above
+        // is accounted for. Without this the cursor would sit still while a
+        // tenant wrote other entity types, and eventually fall below the
+        // retention horizon and force a reset on a device that was up to date.
+        if (! $hasMore) {
+            $position = max($position, $watermark);
         }
 
         return new DeltaPage(

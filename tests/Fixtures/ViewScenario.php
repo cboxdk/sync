@@ -25,9 +25,9 @@ class ViewScenario
         $this->engine ??= new Engine($this->store);
     }
 
-    public function create(string $id, string $project, string $status = 'open', ?string $actor = null): EntityKey
+    public function create(string $id, string $project, string $status = 'open', ?string $actor = null, string $type = 'items'): EntityKey
     {
-        $entity = new EntityKey('test', 'items', $id);
+        $entity = new EntityKey('test', $type, $id);
         $this->process($entity, MutationKind::Create, [
             FieldOperation::set('project', $project),
             FieldOperation::set('status', $status),

@@ -89,6 +89,36 @@ for the same reason: MySQL's default collation is case- and accent-insensitive
 and would otherwise page a bootstrap in a different order from SQLite and
 PostgreSQL.
 
+`sync_commits` carries the entity type of the commit as a column for a related
+reason. A commit is one mutation on one entity, so a view bound to one entity
+type can have the database skip another type's writes rather than decoding them
+and discarding the result. Without it a view matching one type of a busy tenant
+pays to decode every other type's writes on every poll, per device — measured at
+255ms for a device catching up over 2,000 commits across ten types, against 7ms
+with the column. It also stops the commit budget being spent on commits that
+project nothing, which cut the same catch-up from twenty round trips to two.
+
+Narrowing is a hint, never a filter the reader relies on. A commit stored before
+the column existed has no type, and that is read as "unknown" rather than "does
+not match" — the alternative silently drops history a device is owed. The view's
+own `includes()` still decides membership, exactly as it does for a bootstrap.
+
+## Keeping an installed schema current
+
+`migrate()` is idempotent and also reconciles: it adds columns and indexes that
+an existing installation is missing, and leaves everything else alone. Nothing is
+dropped or retyped, and a column that is `NOT NULL` with no default is refused by
+name rather than attempted, because adding one to a table that already holds rows
+cannot work without a backfill the package cannot write for you.
+
+This matters because `CREATE TABLE IF NOT EXISTS` does nothing to a table that
+already exists. Without reconciliation an installation from an earlier release
+would keep a schema the adapter can no longer write to, and find out on its first
+write after the upgrade.
+
+A Laravel host runs its migrations once, so `cboxdk/laravel-sync` ships a second
+migration that re-runs the install for exactly this reason.
+
 ## Retention
 
 Nothing is pruned automatically. `PdoStore::prune($space, $from)` drops commits
