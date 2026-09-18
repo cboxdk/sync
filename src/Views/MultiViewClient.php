@@ -118,6 +118,25 @@ class MultiViewClient
         return false;
     }
 
+    /**
+     * The token this view is waiting for, when a bootstrap was interrupted
+     * part-way.
+     *
+     * A caller that opened a fresh bootstrap instead would be handed a page
+     * this client refuses as out of order, and no amount of retrying would
+     * change that. Resuming is the only way back.
+     */
+    public function pendingBootstrapToken(CursorContext $context): ?BootstrapToken
+    {
+        $contextKey = $context->fingerprint();
+        if ($this->state->cursor($contextKey) !== null) {
+            return null;
+        }
+        $token = $this->state->nextBootstrapToken($contextKey);
+
+        return $token === null ? null : new BootstrapToken($token);
+    }
+
     /** The context this client recorded under a fingerprint, if it has seen it. */
     public function contextFor(string $fingerprint): ?CursorContext
     {

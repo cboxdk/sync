@@ -8,6 +8,9 @@
 - `PdoStore::scanRecords()` matches a field that was never set. A predicate expecting no value required a `sync_fields` row to exist, so SQLite silently omitted exactly those records while the in-memory store returned them - and a bootstrap that omits a record still advances its cursor, so the delta never repaired it.
 - The in-memory watermark no longer derives from retained commits. Pruning all history rewound it to zero and the next mutation reused a sequence a client had already consumed. It is now tracked per space, as the durable adapter already did.
 
+- `Outbox::queue()` accepts `dependsOn`, and `MultiViewClient::pendingBootstrapToken()` exposes the token an interrupted bootstrap is waiting for. Both capabilities existed in the engine and were unreachable from a client: an offline write chain could not be expressed, and a bootstrap cut off part-way could only be restarted, which the replica correctly refuses as out of order.
+- `PdoStore::prune()` is atomic, and a read re-checks the retention horizon after fetching. A prune landing between a reader's horizon check and its query removed commits the reader never saw, and it advanced its cursor past them as though they had been delivered.
+
 ### Tests
 
 - Adds `NestedDataTest` and `RelationsTest`, pinning what field-level conflict detection actually means for nested documents and for entities that reference each other: nothing merges inside a field, a reordered object is the same value, an empty object and an empty array stay distinct at depth, a stale write to an untouched field still applies, a delete leaves a tombstone rather than a hole so following a reference reads a dead record, and a record survives leaving one view while another still owns it.

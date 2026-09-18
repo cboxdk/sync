@@ -9,6 +9,7 @@ use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Data\RecordCriteria;
 use Cbox\Sync\Engine;
 use Cbox\Sync\Enums\MutationKind;
+use Cbox\Sync\Exceptions\HistoryUnavailable;
 use Cbox\Sync\Persistence\InMemoryStore;
 use Cbox\Sync\Persistence\Pdo\PdoStore;
 use Cbox\Sync\ValueObjects\CommitSequence;
@@ -63,3 +64,29 @@ it('does not rewind the commit sequence when all history is pruned', function (S
     seed($store, 'b', [Op::set('status', 'open')]);
     expect($store->watermark('space')->value)->toBe(2);
 })->with(parityStores());
+
+it('refuses a read whose history was pruned underneath it', function () {
+    $database = tempnam(sys_get_temp_dir(), 'cbox-prune-').'.sqlite';
+    try {
+        $open = function () use ($database): PdoStore {
+            $store = new PdoStore(new PDO('sqlite:'.$database));
+            $store->migrate();
+
+            return $store;
+        };
+        $store = $open();
+        foreach (['a', 'b', 'c'] as $id) {
+            seed($store, $id, [Op::set('status', 'open')]);
+        }
+
+        // Another connection prunes everything the reader was about to fetch.
+        $open()->prune('space', new CommitSequence(3));
+
+        // Returning only commit 3 and letting the cursor advance to 3 would
+        // lose commits 1 and 2 permanently, with nothing to signal it.
+        expect(fn () => $store->commitsAfter('space', 0, 10))
+            ->toThrow(HistoryUnavailable::class);
+    } finally {
+        @unlink($database);
+    }
+});

@@ -197,11 +197,21 @@ class PdoStore implements Store
         return new CommitSequence($value === null ? 1 : (int) $value);
     }
 
-    /** Drops every commit below $from. Cursors behind the new horizon can only be recovered by a bootstrap. */
+    /**
+     * Drops every commit below $from. Cursors behind the new horizon can only
+     * be recovered by a bootstrap.
+     *
+     * Atomic, because a reader that saw the old horizon and the new set of
+     * commits would advance its cursor straight past the ones just removed.
+     */
     public function prune(string $space, CommitSequence $from): void
     {
-        $this->run('DELETE FROM sync_commits WHERE space = ? AND sequence < ?', [$space, $from->value]);
-        $this->run('UPDATE sync_spaces SET retained_from = ? WHERE space = ? AND retained_from < ?', [$from->value, $space, $from->value]);
+        $this->transaction($space, function () use ($space, $from): bool {
+            $this->run('UPDATE sync_spaces SET retained_from = ? WHERE space = ? AND retained_from < ?', [$from->value, $space, $from->value]);
+            $this->run('DELETE FROM sync_commits WHERE space = ? AND sequence < ?', [$space, $from->value]);
+
+            return true;
+        });
     }
 
     public function commitsAfter(string $space, int $after, int $limit): array
@@ -210,8 +220,13 @@ class PdoStore implements Store
             throw new InvalidRequest('Invalid commit cursor or budget');
         }
         $this->guardHorizon($space, $after);
+        $commits = $this->commitRows($space, $after, $limit);
+        // Re-checked after the read. A prune between the first check and the
+        // query removes commits the reader then never sees, and it would
+        // advance its cursor past them as though they had been delivered.
+        $this->guardHorizon($space, $after);
 
-        return $this->commitRows($space, $after, $limit);
+        return $commits;
     }
 
     public function scanRecords(string $space, ?EntityKey $after, int $limit, ?RecordCriteria $criteria = null): array
@@ -265,6 +280,7 @@ class PdoStore implements Store
         // Every commit carries at least one change, so no more than $limit of
         // them can fit the change budget.
         $candidates = $this->commitRows($space, $after, $limit + 1);
+        $this->guardHorizon($space, $after);
         $page = [];
         $size = 0;
         $cursor = $after;

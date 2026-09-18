@@ -39,14 +39,18 @@ class Outbox
     }
 
     /**
-     * Queue a write. The sequence is assigned here and never reused, because
-     * the server rejects a repeated one outright.
+     * Queue a write.
+     *
+     * $dependsOn names an earlier mutation of this device's, and is how two
+     * offline edits to the same field say that the second knows about the
+     * first. Without it the second conflicts with the device's own earlier
+     * edit, which is never what the user meant.
      *
      * @param  list<FieldOperation>  $operations
      */
-    public function queue(EntityKey $entity, MutationKind $kind, array $operations, int $baseVersion, bool $atomic = true, ?Resolution $resolution = null): Mutation
+    public function queue(EntityKey $entity, MutationKind $kind, array $operations, int $baseVersion, bool $atomic = true, ?Resolution $resolution = null, ?string $dependsOn = null): Mutation
     {
-        return $this->store->transaction(function () use ($entity, $kind, $operations, $baseVersion, $atomic, $resolution): Mutation {
+        return $this->store->transaction(function () use ($entity, $kind, $operations, $baseVersion, $atomic, $resolution, $dependsOn): Mutation {
             $mutation = new Mutation(
                 ($this->identity)(),
                 $entity,
@@ -59,7 +63,7 @@ class Outbox
                 new RecordVersion($baseVersion),
                 $operations,
                 $atomic,
-                null,
+                $dependsOn,
                 $resolution,
             );
             $this->store->append($mutation);
