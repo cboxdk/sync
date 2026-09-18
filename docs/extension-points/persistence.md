@@ -65,6 +65,22 @@ with NUL bytes, which a PostgreSQL text column cannot hold at all. Keeping
 payloads to a safe alphabet makes them identical on every driver rather than
 working by accident on the permissive ones.
 
+Every payload carries a format version, written as a `1:` prefix. Base64 cannot
+contain a colon, so rows written before the tag existed are unambiguous and are
+still read. The tag is what makes a future change of encoding say what happened,
+instead of surfacing years later as an unserialize failure that reads like a
+corrupt database. A payload from a newer format than the adapter understands is
+refused by name rather than guessed at.
+
+Decoding names the classes it accepts. PHP's `unserialize()` allows any class by
+default, which turns any row someone can write — a restored backup, the replica
+database sitting on an end-user's device, SQL injection anywhere else in the host
+application — into an object-injection chain against whatever that application
+has loaded. A payload naming anything outside the set the engine stores is
+refused. It has to be refused rather than tolerated: an unlisted class decodes to
+an incomplete object, and a nested one would otherwise pass a type check while
+being unusable, arriving as a record whose fields quietly no longer work.
+
 The exception is `sync_fields`, which exists purely so a view's field equality is
 an index lookup rather than a scan. It stores a hash of the canonical field
 value, not the value, which keeps equality exact without depending on any
