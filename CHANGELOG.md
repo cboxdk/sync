@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0 - 2026-09-20
+
+### Added (breaking)
+
+- **`OutboxStore::rekey()`** renames the entity every queued mutation refers to. A create carries a handle the device made up for itself, and the server answers with the name it gave the record; everything queued behind that create still refers to the handle and would be a write to a record that does not exist. Mutation identities are untouched - renaming what a write targets is not a new write, and giving it a new id would let the server apply it twice. Covered by a parity test that runs against both shipped stores.
+
+  Only the key is renamed. A field VALUE holding the handle - a child carrying its parent's id - belongs to the application, and no store can know which of its fields are references, so `Outbox::rekey()` leaves that to the caller rather than doing it half way.
+
+  **Breaking:** an implementation of `OutboxStore` must provide `rekey()`. Both shipped stores do.
+
+- `EntityKey::equals()` and `Mutation::withEntity()`, which the rename needs and which were awkward to express from outside.
+
 ## 0.5.0 - 2026-09-20
 
 ### Fixed (breaking)
