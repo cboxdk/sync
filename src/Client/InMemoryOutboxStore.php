@@ -7,6 +7,7 @@ namespace Cbox\Sync\Client;
 use Cbox\Sync\Client\Contracts\OutboxStore;
 use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Exceptions\TransientFailure;
+use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\Replica;
 
 class InMemoryOutboxStore implements OutboxStore
@@ -25,6 +26,15 @@ class InMemoryOutboxStore implements OutboxStore
     public function append(Mutation $mutation): void
     {
         $this->queue[] = $mutation;
+    }
+
+    public function rekey(EntityKey $from, EntityKey $to): void
+    {
+        foreach ($this->queue as $index => $mutation) {
+            if ($mutation->entity->equals($from)) {
+                $this->queue[$index] = $mutation->withEntity($to);
+            }
+        }
     }
 
     public function head(?string $entityType = null): ?Mutation

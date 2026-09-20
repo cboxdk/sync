@@ -8,6 +8,7 @@ use Cbox\Sync\Client\Contracts\OutboxStore;
 use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\Persistence\Pdo\Payload;
+use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\Replica;
 
 /**
@@ -53,6 +54,26 @@ class PdoOutboxStore implements OutboxStore
         $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, queued_at, payload, abandoned_reason) VALUES (?, ?, ?, ?, ?, ?, NULL)', [
             $mutation->id, $mutation->replica->id, $mutation->entity->space, $mutation->entity->type, $position, Payload::encode($mutation),
         ]);
+    }
+
+    public function rekey(EntityKey $from, EntityKey $to): void
+    {
+        // The space and type are columns, the id is only inside the payload, so
+        // the rows are narrowed by column and then matched exactly on the key.
+        $rows = $this->rows(
+            'SELECT mutation_id, payload FROM sync_outbox WHERE space = ? AND entity_type = ? AND abandoned_reason IS NULL',
+            [$from->space, $from->type],
+        );
+
+        foreach ($rows as $row) {
+            $mutation = Payload::decode($row[1], Mutation::class);
+            if (! $mutation->entity->equals($from)) {
+                continue;
+            }
+            $this->run('UPDATE sync_outbox SET space = ?, entity_type = ?, payload = ? WHERE mutation_id = ?', [
+                $to->space, $to->type, Payload::encode($mutation->withEntity($to)), $row[0],
+            ]);
+        }
     }
 
     public function head(?string $entityType = null): ?Mutation
@@ -146,6 +167,30 @@ class PdoOutboxStore implements OutboxStore
         $value = $statement->fetchColumn();
 
         return $value === false || $value === null ? null : (string) $value;
+    }
+
+    /**
+     * @param  list<string|int|null>  $bindings
+     * @return list<array{0: string, 1: string}>
+     */
+    private function rows(string $sql, array $bindings): array
+    {
+        $statement = $this->pdo->prepare($sql);
+        $statement->execute($bindings);
+
+        $rows = [];
+        foreach ($statement->fetchAll(\PDO::FETCH_NUM) as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $id = $row[0] ?? null;
+            $payload = $row[1] ?? null;
+            if ((is_string($id) || is_int($id)) && is_string($payload)) {
+                $rows[] = [(string) $id, $payload];
+            }
+        }
+
+        return $rows;
     }
 
     /** @param list<string|int|null> $bindings */

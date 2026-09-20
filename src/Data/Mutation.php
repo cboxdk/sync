@@ -53,6 +53,32 @@ readonly class Mutation
         }
     }
 
+    /**
+     * The same mutation against a differently named record.
+     *
+     * A create carries a handle the device made up, and everything queued
+     * behind it refers to that handle until the server answers with the name it
+     * gave the record. The identity of the mutation itself does not change:
+     * renaming the record it targets is not a new write, and giving it a new id
+     * would let the server apply it twice.
+     */
+    public function withEntity(EntityKey $entity): self
+    {
+        return new self(
+            $this->id,
+            $entity,
+            $this->replica,
+            $this->sequence,
+            $this->kind,
+            $this->baseVersion,
+            $this->operations,
+            $this->atomic,
+            $this->dependsOn,
+            $this->resolution,
+            $this->expectedVersion,
+        );
+    }
+
     /** @param array<array-key, mixed> $operations */
     private static function validateOperations(array $operations): void
     {

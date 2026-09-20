@@ -159,3 +159,43 @@ it('hands out only the entity type that was asked for', function (OutboxStore $s
     expect($outbox->pending('tasks'))->toBe(1);
     expect($outbox->pending())->toBe(2);
 })->with(outboxStores());
+
+/**
+ * A create carries a handle the device made up, and the server answers with the
+ * name it gave the record. Everything queued behind that create still refers to
+ * the handle, and would be a write to a record that does not exist.
+ */
+it('renames the record every queued mutation refers to', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $handle = new EntityKey('team-1', 'tasks', 'handle-1');
+    $other = new EntityKey('team-1', 'tasks', 'untouched');
+
+    $outbox->queue($handle, MutationKind::Create, [Op::set('title', 'a')], 0);
+    $outbox->queue($handle, MutationKind::Update, [Op::set('title', 'b')], 1);
+    $outbox->queue($other, MutationKind::Create, [Op::set('title', 'c')], 0);
+
+    $named = new EntityKey('team-1', 'tasks', 'server-name');
+    $outbox->rekey($handle, $named);
+
+    $seen = [];
+    while (($head = $outbox->head()) !== null) {
+        $seen[] = $head->entity->id;
+        $outbox->acknowledged($head);
+    }
+
+    // The two behind the handle now name the record the server made, and the
+    // mutation identities are untouched - renaming what a write targets is not
+    // a new write.
+    expect($seen)->toBe(['server-name', 'server-name', 'untouched']);
+})->with(outboxStores());
+
+it('leaves the queue alone when the name did not change', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $key = new EntityKey('team-1', 'tasks', 'same');
+    $outbox->queue($key, MutationKind::Create, [Op::set('title', 'a')], 0);
+
+    $outbox->rekey($key, new EntityKey('team-1', 'tasks', 'same'));
+
+    expect($outbox->head()?->entity->id)->toBe('same');
+    expect($outbox->pending())->toBe(1);
+})->with(outboxStores());

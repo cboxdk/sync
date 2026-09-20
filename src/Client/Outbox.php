@@ -103,6 +103,31 @@ class Outbox
         );
     }
 
+    /**
+     * The record this queue was writing to turned out to be called something
+     * else.
+     *
+     * A create carries a handle the device made up, and the server answers with
+     * the name it gave the record. Everything queued behind that create still
+     * refers to the handle and would be a write to a record that does not
+     * exist.
+     *
+     * Only the key is renamed. A field VALUE holding the handle - a child
+     * carrying its parent's id - belongs to the application, and no queue can
+     * know which fields are references, so the rename is reported to the
+     * application rather than quietly half-done.
+     */
+    public function rekey(EntityKey $from, EntityKey $to): void
+    {
+        if ($from->equals($to)) {
+            return;
+        }
+
+        $this->store->transaction(function () use ($from, $to): void {
+            $this->store->rekey($from, $to);
+        });
+    }
+
     public function pending(?string $entityType = null): int
     {
         return $this->store->pending($entityType);

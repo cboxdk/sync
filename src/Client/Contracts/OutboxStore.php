@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\Sync\Client\Contracts;
 
 use Cbox\Sync\Data\Mutation;
+use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\Replica;
 
 /**
@@ -31,6 +32,21 @@ interface OutboxStore
      * one type and must not send another type's queued work as that type.
      */
     public function head(?string $entityType = null): ?Mutation;
+
+    /**
+     * Rename the entity every queued mutation refers to.
+     *
+     * A create carries a handle the device made up, and the server answers with
+     * the name it actually gave the record. Anything queued behind that create
+     * still refers to the handle, and would be a write to a record that does
+     * not exist.
+     *
+     * This renames the key, which the queue owns. A field VALUE that refers to
+     * the handle - a child holding its parent's id - is the application's, and
+     * no store can know which fields are references, so the rename is reported
+     * rather than hidden.
+     */
+    public function rekey(EntityKey $from, EntityKey $to): void;
 
     /**
      * The highest sequence acknowledged for this replica IN THIS SPACE.

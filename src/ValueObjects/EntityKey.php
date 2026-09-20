@@ -19,4 +19,11 @@ readonly class EntityKey
     {
         return serialize([$this->space, $this->type, $this->id]);
     }
+
+    public function equals(self $other): bool
+    {
+        return $this->space === $other->space
+            && $this->type === $other->type
+            && $this->id === $other->id;
+    }
 }
