@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0 - 2026-09-20
+
+### Fixed (breaking)
+
+- **A conflicting mutation skipped the host's validator.** The validator ran only for `Applied`, `Partial` and `Noop`, and a conflict still commits its draft - so a preserved candidate reached storage without the host ever seeing it. In the Laravel transport the validator is what carries the authorization re-check against the record as locked, so the one path this package exists for was also the one path where a principal whose permission changed between the outer check and the lock had their proposal preserved anyway. The condition is now the exact inverse of the rollback beside it: everything that reaches storage is validated, and `Rejected` - the only outcome that never does - is the only one skipped.
+- **Breaking:** `Store::commitsAfter()` takes an optional `$entityType`. An implementation of the contract must accept it; the reference adapters and anything extending them already do.
+
+### Security
+
+- Stored payloads are decoded against a named list of the 28 classes the engine actually stores, instead of `unserialize()`'s default of allowing any class. Any row an attacker can write - a restored backup, the replica database on an end-user's device, SQL injection elsewhere in the host - was an object-injection chain against whatever that application had loaded. A payload naming anything outside the set is refused rather than tolerated, because an unlisted class decodes to an incomplete object and a nested one would otherwise pass a type check while being unusable.
+- Payloads carry a format version, so changing the encoding later is detectable on read instead of arriving years afterwards as a corrupt-looking failure. Rows written before the tag are unambiguous and still read; base64 cannot contain a colon.
+
+### Performance
+
+- **A view bound to one entity type no longer pays for another type's writes.** `delta()` read every commit in the space and filtered in PHP, which is the dominant cost of a poll on a busy tenant, per device. The entity type is now a column - a commit is one mutation on one entity - and a queryable view passes it as a hint. Measured on a catch-up over 2,000 commits across ten types with the view matching one: **255ms over twenty round trips, down to 7ms over two**, because the commit budget is no longer spent on commits that project nothing.
+- The hint is never a filter the reader relies on: a commit stored before the column existed has no type, which is read as "unknown" rather than "does not match". `includes()` still decides.
+
+### Added
+
+- `EntityTypeView` - every live record of one entity type in the space. Only `FieldEqualsView` existed, so a host with no filter to apply had nothing to pass. It is queryable, so the store pages it through an index and a delta skips other types without decoding them.
+- `migrate()` reconciles an existing installation. `CREATE TABLE IF NOT EXISTS` does nothing to a table that is already there, so an installation from an earlier release would keep a schema the adapter can no longer write to and find out on its first write after the upgrade. Missing columns and indexes are added; nothing is dropped or retyped, and a `NOT NULL` column with no default is refused by name rather than attempted. Verified on SQLite, MySQL 8 and PostgreSQL, including that a second run changes nothing.
+
 ## 0.4.0 - 2026-09-18
 
 ### Fixed (breaking)
