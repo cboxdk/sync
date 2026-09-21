@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.0 - 2026-09-21
+
+### Added
+
+- **`Contracts\CommitObserver`** — the engine tells a listener that a space advanced, so devices no longer have to ask to find out. Polling alone makes the interval a straight trade between how stale the data may be and how much load every idle device puts on the server.
+
+  It carries the watermark and NOTHING else, on purpose. The log is per space, but authorization is per principal and per view: putting the changes in the signal would hand every listener everything written in that space, including the rows and fields a given reader may not see. The signal says there is something new, up to here; the reader then asks through the endpoint that knows who it is.
+
+  Called after the transaction commits, never inside it — a rollback must not announce a write that did not happen, and a replay or a refusal appends no commit so it signals nothing. A throw cannot unmake a commit that already happened, so the engine does not let one reach the caller either: failing a push for a durably stored mutation would only make the client retry, meet its own receipt, and be told the same thing again.
+
+  Delivery is at-most-once and unordered by contract, which is why a reader still polls on a slow timer. The signal makes sync prompt; the cursor is what makes it correct.
+
 ## 0.7.0 - 2026-09-21
 
 ### Fixed (breaking)
