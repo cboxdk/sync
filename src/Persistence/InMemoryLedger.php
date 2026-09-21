@@ -116,6 +116,12 @@ class InMemoryLedger implements Ledger
 
     public function commitDraft(): void
     {
+        // The same refusal rollbackDraft gives. Silently accepting it here let
+        // a ledger bug through on one adapter and raised a raw PDOException on
+        // the other - which on PostgreSQL also poisons the whole transaction.
+        if ($this->savepoint === null) {
+            throw new \LogicException('No draft to commit');
+        }
         $this->savepoint = null;
     }
 

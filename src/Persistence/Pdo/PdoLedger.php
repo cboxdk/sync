@@ -121,7 +121,17 @@ class PdoLedger implements Ledger
                 $receipt->mutation->id, $this->space, Payload::encode($receipt),
             ]);
         } catch (\PDOException $exception) {
-            // Mutation identity is global, so the space lock cannot prevent this.
+            // Only a genuine duplicate. Catching every PDOException here
+            // reported a deadlock, a dropped connection, a too-long identifier
+            // and a missing table all as "already processed" - and a caller
+            // that trusts that answer drops the write and reports success.
+            //
+            // Mutation identity is global, so the space lock cannot prevent a
+            // real duplicate.
+            if (! in_array($exception->getCode(), ['23000', '23505'], true)) {
+                throw $exception;
+            }
+
             throw new TransientFailure('Mutation identity already recorded', previous: $exception);
         }
     }
@@ -155,6 +165,9 @@ class PdoLedger implements Ledger
 
     public function commitDraft(): void
     {
+        if ($this->savepoint === null) {
+            throw new \LogicException('No draft to commit');
+        }
         $this->connection->exec('RELEASE SAVEPOINT '.self::DRAFT);
         $this->savepoint = null;
     }

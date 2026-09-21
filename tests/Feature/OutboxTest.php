@@ -8,6 +8,7 @@ use Cbox\Sync\Client\Outbox;
 use Cbox\Sync\Client\Pdo\PdoOutboxStore;
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Enums\MutationKind;
+use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\Replica;
 
@@ -198,4 +199,28 @@ it('leaves the queue alone when the name did not change', function (OutboxStore 
 
     expect($outbox->head()?->entity->id)->toBe('same');
     expect($outbox->pending())->toBe(1);
+})->with(outboxStores());
+
+/**
+ * A mutation identity is burned once it is used. Both stores refuse a second
+ * one, and refuse it the same way: a raw driver exception escaping the
+ * package's own hierarchy left a caller unable to tell it from a disk error.
+ */
+it('refuses to queue an identity it already holds', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $key = new EntityKey('team-1', 'tasks', 'one');
+    $first = $outbox->queue($key, MutationKind::Create, [Op::set('title', 'a')], 0);
+
+    expect(fn () => $store->append($first))->toThrow(InvalidRequest::class);
+    expect($outbox->pending())->toBe(1);
+})->with(outboxStores());
+
+/** Abandoning keeps the identity burned, on both. */
+it('refuses to re-queue an identity it abandoned', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $key = new EntityKey('team-1', 'tasks', 'one');
+    $mutation = $outbox->queue($key, MutationKind::Create, [Op::set('title', 'a')], 0);
+    $outbox->abandon($mutation, 'forbidden');
+
+    expect(fn () => $store->append($mutation))->toThrow(InvalidRequest::class);
 })->with(outboxStores());

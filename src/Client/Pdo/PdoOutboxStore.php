@@ -6,6 +6,7 @@ namespace Cbox\Sync\Client\Pdo;
 
 use Cbox\Sync\Client\Contracts\OutboxStore;
 use Cbox\Sync\Data\Mutation;
+use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\Persistence\Pdo\Payload;
 use Cbox\Sync\ValueObjects\EntityKey;
@@ -51,9 +52,22 @@ class PdoOutboxStore implements OutboxStore
     public function append(Mutation $mutation): void
     {
         $position = (int) ($this->scalar('SELECT COALESCE(MAX(queued_at), 0) FROM sync_outbox', []) ?? '0') + 1;
-        $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, queued_at, payload, abandoned_reason) VALUES (?, ?, ?, ?, ?, ?, NULL)', [
-            $mutation->id, $mutation->replica->id, $mutation->entity->space, $mutation->entity->type, $position, Payload::encode($mutation),
-        ]);
+
+        try {
+            $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, queued_at, payload, abandoned_reason) VALUES (?, ?, ?, ?, ?, ?, NULL)', [
+                $mutation->id, $mutation->replica->id, $mutation->entity->space, $mutation->entity->type, $position, Payload::encode($mutation),
+            ]);
+        } catch (\PDOException $exception) {
+            // An abandoned row keeps its id, so re-queuing under the same
+            // identity lands here. Both stores refuse it, and they refuse it
+            // the same way: a raw driver exception escaping the package's own
+            // hierarchy left a caller unable to tell it from a disk error.
+            if (! in_array($exception->getCode(), ['23000', '23505'], true)) {
+                throw $exception;
+            }
+
+            throw new InvalidRequest('Mutation identity is already queued: '.$mutation->id, previous: $exception);
+        }
     }
 
     public function rekey(EntityKey $from, EntityKey $to): void

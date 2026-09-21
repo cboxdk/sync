@@ -6,6 +6,7 @@ namespace Cbox\Sync\Client;
 
 use Cbox\Sync\Client\Contracts\OutboxStore;
 use Cbox\Sync\Data\Mutation;
+use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\Replica;
@@ -25,6 +26,19 @@ class InMemoryOutboxStore implements OutboxStore
 
     public function append(Mutation $mutation): void
     {
+        foreach ($this->queue as $queued) {
+            if ($queued->id === $mutation->id) {
+                throw new InvalidRequest('Mutation identity is already queued: '.$mutation->id);
+            }
+        }
+        // Abandoning does not free the identity. The durable store keeps the
+        // row and its primary key, so letting it be reused here would be a
+        // recovery flow that works in development and fails in production.
+        foreach ($this->abandoned as $entry) {
+            if ($entry['mutation']->id === $mutation->id) {
+                throw new InvalidRequest('Mutation identity is already queued: '.$mutation->id);
+            }
+        }
         $this->queue[] = $mutation;
     }
 
