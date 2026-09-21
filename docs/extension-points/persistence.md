@@ -82,17 +82,17 @@ an incomplete object, and a nested one would otherwise pass a type check while
 being unusable, arriving as a record whose fields quietly no longer work.
 
 The exception is `sync_fields`, which exists purely so a view's field equality is
-an index lookup rather than a scan. Its index carries the keyset columns as well
-as the predicate, so one index both finds the matching records and hands them
-over in order - a selective page then costs the page rather than the space.
-Anchored on `sync_records` instead, the planner probes the field table once per
-record: measured 331ms for one page of a 32,000-record space, against 0.2ms this
-way. It stores a hash of the canonical field
-value, not the value, which keeps equality exact without depending on any
-database's JSON handling. Identity columns use a binary collation on every driver
-for the same reason: MySQL's default collation is case- and accent-insensitive
-and would otherwise page a bootstrap in a different order from SQLite and
-PostgreSQL.
+an index lookup rather than a scan. It stores a hash of the canonical field value,
+not the value, which keeps equality exact without depending on any database's JSON
+handling. Identity columns use a binary collation on every driver for the same
+reason: MySQL's default collation is case- and accent-insensitive and would
+otherwise page a bootstrap in a different order from SQLite and PostgreSQL.
+
+Its index carries the keyset columns as well as the predicate, so one index both
+finds the matching records and hands them over in order, and a selective page
+costs the page rather than the space. Anchored on `sync_records` instead, the
+planner probes the field table once per record: measured 331ms for one page of a
+32,000-record space, against 0.2ms this way.
 
 `sync_commits` carries the entity type of the commit as a column for a related
 reason. A commit is one mutation on one entity, so a view bound to one entity
@@ -126,8 +126,11 @@ migration that re-runs the install for exactly this reason.
 
 ## Retention
 
-Nothing is pruned automatically. `PdoStore::prune($space, $from)` drops commits
-below a sequence and moves the horizon; sequences keep their numbers. After that,
+Nothing is pruned automatically. `Store::prune($space, $from)` drops commits
+below a sequence and moves the horizon; sequences keep their numbers. It is on
+the contract, not only on the adapters, because the log is the only thing here
+that grows without bound and a host had no supported way to reach it.
+`cboxdk/laravel-sync` ships `php artisan sync:prune` over it. After that,
 `retainedFrom()` reports the horizon, and a read below it raises
 `Exceptions\HistoryUnavailable`, which the view service turns into
 `ResetRequired(HistoryPruned)` so a client re-bootstraps instead of silently
@@ -139,11 +142,12 @@ safe.
 
 ## What is proven, and what is not
 
-The whole test suite runs against all three stores — in memory, against a store
-that shares no objects across commits, and against SQLite — from the same
-fixtures, so the adapters are held to identical behaviour. It also runs against
-PostgreSQL and MySQL, in CI and on demand through `SYNC_STORE=pdo` with a
-`SYNC_DSN`, along with the simulator and the concurrency experiment. Six
+The whole test suite runs against five configurations from the same fixtures — in
+memory, against a store that shares no objects across commits, against SQLite, and
+against a real MySQL 8 and PostgreSQL — so the adapters are held to identical
+behaviour rather than assumed to have it. The databases run in CI and on demand
+through `SYNC_STORE=pdo` with a `SYNC_DSN`, along with the simulator and the
+concurrency experiment. Six
 concurrent writer processes against a real PostgreSQL and a real MySQL produce a
 gapless log with every replica acknowledged.
 
