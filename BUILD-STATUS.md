@@ -18,12 +18,12 @@ Implemented:
 
 Verification on 2026-09-16:
 
-- Pest: 125 tests, ~1,506 assertions, run three times from the same fixtures — in memory, against a store that shares no objects across commits, and against SQLite. PHP 8.4 and 8.5.
+- Pest: 158 tests, ~1,668 assertions, run from the same fixtures against five configurations — in memory, against a store that shares no objects across commits, against SQLite, and against a real MySQL 8 and PostgreSQL. PHP 8.4 and 8.5.
 - Full composer qa passed: Pint, PHPStan max (source, testing fixtures and scripts), all three test runs, 61 dependency licenses and full locked dependency audit.
 - Strict Composer metadata validation; SBOM and generated requirements reproduce without drift.
 - Simulator seeds 7, 42 and 2026 produce identical results in memory, on SQLite and over a DSN.
 - `bin/concurrency.php`: 6 OS processes writing one space produce a gapless ascending commit log with every replica fully acknowledged.
-- Executed quickstart, resolution, validator and bootstrap/delta documentation examples; relative links valid; Cbox documentation importer reports complete.
+- Executed the quickstart, resolution, validator and bootstrap documentation examples; relative links valid; Cbox documentation importer reports complete.
 
 The contract moved substantially before this first tag; CHANGELOG.md records what changed. Being 0.x, a minor may still move it again: Composer's caret is narrow below 1.0, so `^0.1` will not resolve a future 0.2.
 

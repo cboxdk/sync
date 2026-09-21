@@ -44,7 +44,12 @@ epoch rotation into a chance for deleted records to come back.
 `Client\Contracts\OutboxStore` — in memory, or `Client\Pdo\PdoOutboxStore`.
 
 ```php
-$outbox = Outbox::for($store, new Replica($deviceId));
+// The queue and the replica share one connection, so what the device knows and
+// what it still owes commit against the same database.
+$queue = new PdoOutboxStore($pdo);
+$queue->migrate();
+
+$outbox = Outbox::for($queue, new Replica($deviceId));
 $outbox->queue($entity, MutationKind::Update, [FieldOperation::set('title', $title)], $baseVersion);
 ```
 

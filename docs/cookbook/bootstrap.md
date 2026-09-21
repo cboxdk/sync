@@ -16,6 +16,7 @@ How the pages themselves keep their place is a strategy, because the guarantee a
 Every page is presented with the view it belongs to, so the context binding is checked on each call rather than only at open.
 
 ```php
+use Cbox\Sync\Client\InMemoryClientState;
 use Cbox\Sync\Views\FieldEqualsView;
 use Cbox\Sync\Views\MultiViewClient;
 use Cbox\Sync\Views\ViewSyncService;
@@ -28,11 +29,16 @@ $view = FieldEqualsView::matching(
 );
 
 $views = new ViewSyncService($store, schemaVersion: '1', epoch: '2026-09');
-$client = new MultiViewClient;
-$token = $views->openBootstrap($views->context('tenant-1', $view), $view, pageSize: 100);
+$client = new MultiViewClient(new InMemoryClientState);
+
+// The context is held for the whole bootstrap, not rebuilt per page: every
+// page is presented with the view it belongs to, so the binding is checked on
+// each call rather than only at open.
+$context = $views->context('tenant-1', $view);
+$token = $views->openBootstrap($context, $view, pageSize: 100);
 
 do {
-    $page = $views->bootstrap($token, $view);
+    $page = $views->bootstrap($context, $view, $token);
     $client->applyBootstrap($page);
     $token = $page->nextToken;
 } while ($token !== null);

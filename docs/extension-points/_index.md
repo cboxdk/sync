@@ -6,4 +6,4 @@ description: "Replace policy, identifiers or persistence through small contracts
 
 # Extension points
 
-[Contracts](contracts.md)
+[Contracts](contracts.md) · [Persistence](persistence.md)
