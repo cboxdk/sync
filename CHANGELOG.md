@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0 - 2026-09-21
+
+### Fixed (breaking)
+
+- **A record could be dropped from a bootstrap page.** PHP compares two numeric strings NUMERICALLY, so the in-memory store put `'9'` after `'10'` where a database puts it before - and compared `'1e2'` and `'100'` EQUAL, which made the keyset filter treat one of two distinct records as already passed and drop it while the page still reported itself finished. Entity ids are client input, so this was reachable on purpose. Identifiers are compared by bytes now, which is what the contract promises and what every driver's binary collation gives.
+- **`putReceipt()` reported every database error as "mutation identity already recorded."** A deadlock, a dropped connection, an over-long identifier and a missing table all arrived as "already processed", and a caller that trusts that answer drops the write and reports success. Only a real integrity violation says it now.
+- **Breaking:** `Store::prune()` is on the contract. The commit log is the only thing here that grows without bound, and a host given the contract had no way to reach the pruning both adapters already implemented - so there was no supported way to stop a busy tenant filling the disk. Both shipped adapters already provided it.
+- **Breaking:** `beforeCommit()` takes the space on both adapters, and the in-memory workspace gets its own `beforePublish()` hook. They differed before, so a fault-injecting store could only extend the in-memory one - and the rollback test, which pins that a failure at the storage boundary takes back the domain state, the conflicts, the receipt, the acknowledgement and the commit together, had never run against a database on any driver. It now runs on whichever adapter the suite is running against, green on SQLite, MySQL 8 and PostgreSQL.
+- **Breaking:** `commitDraft()` without a draft is refused on both adapters rather than being a silent no-op on one and a raw `PDOException` on the other - which on PostgreSQL also poisons the whole transaction. `OutboxStore::append()` refuses a duplicate identity on both, as `InvalidRequest` rather than a driver exception escaping the package's hierarchy; abandoning does not free the identity, because the durable store keeps the row and its key.
+
+### Performance
+
+- **A selective bootstrap page costs the page, not the space.** `scanRecords()` emitted a correlated `EXISTS` anchored on `sync_records`, so the planner drove from the record scan and probed `sync_fields` once for every record in the space - the field index was unreachable. The query now drives from `sync_fields`, whose index carries the keyset columns as well as the predicate, so one index both finds the records and returns them in order with no sort. Measured on a 32,000-record space: **331ms to 0.2ms**. The widened index is named apart from the one it replaces, so an existing installation gains it by reconciliation rather than by rebuilding an index on a live table; `sync_fields_lookup` is a strict prefix of it and can be dropped whenever the host chooses.
+- **The outbox is indexed.** `head()` is called once per mutation while a device drains its queue, and the table had no index at all, so every call scanned it and sorted in a temp b-tree; `append()` took its position with `MAX(queued_at)`, which is O(n) per write. Measured on a 5,000-deep backlog: queueing **4,955ms to 583ms**, draining **~32,000ms to 957ms**. That cost lands on the device, on the day the user most needs it to work.
+- `FrozenBootstrapSessions` retains a bounded number of sessions and drops the oldest. Each holds a fully materialized view and none was ever removed, so a long-lived process accumulated one per bootstrap until it ran out of memory. It also makes `BootstrapSessionExpired` an outcome a client can meet rather than a branch that could never be taken.
+
+### Tests
+
+- The parity suite pages a hostile identifier set - `'9'`, `'10'`, `'100'`, `'1e2'`, `'2'`, `'01'` and a trailing space - through both adapters one record at a time, and asserts each is seen exactly once. It used a friendly alphabet before, which is why the ordering defect above could hide in it.
+
 ## 0.6.0 - 2026-09-20
 
 ### Added (breaking)
