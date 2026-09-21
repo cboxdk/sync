@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\Sync;
 
+use Cbox\Sync\Contracts\CommitObserver;
 use Cbox\Sync\Contracts\ConflictResolver;
 use Cbox\Sync\Contracts\EntityValidator;
 use Cbox\Sync\Contracts\IdGenerator;
@@ -30,6 +31,7 @@ use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Enums\MutationStatus;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\ProtocolException;
+use Cbox\Sync\Observers\NullCommitObserver;
 use Cbox\Sync\Resolvers\PreserveConflict;
 use Cbox\Sync\Support\UuidV7Generator;
 use Cbox\Sync\Validation\AcceptAll;
@@ -39,11 +41,12 @@ use Cbox\Sync\ValueObjects\RecordVersion;
 
 class Engine
 {
-    public function __construct(private Store $store, private ConflictResolver $resolver = new PreserveConflict, private IdGenerator $ids = new UuidV7Generator, private EntityValidator $validator = new AcceptAll) {}
+    public function __construct(private Store $store, private ConflictResolver $resolver = new PreserveConflict, private IdGenerator $ids = new UuidV7Generator, private EntityValidator $validator = new AcceptAll, private CommitObserver $observer = new NullCommitObserver) {}
 
     public function process(Mutation $mutation, AdapterContext $context = new AdapterContext): MutationResult
     {
-        return $this->store->transaction($mutation->entity->space, function (Ledger $ledger) use ($mutation, $context): MutationResult {
+        $committed = null;
+        $result = $this->store->transaction($mutation->entity->space, function (Ledger $ledger) use ($mutation, $context, &$committed): MutationResult {
             $receipt = $ledger->receipt($mutation->id);
             if ($receipt !== null) {
                 if ($receipt->mutation->fingerprint() !== $mutation->fingerprint() || $receipt->provenance->actorId !== $context->actorId || $receipt->provenance->integrationId !== $context->integrationId) {
@@ -116,9 +119,32 @@ class Engine
             }
             $changes[] = new Change(count($changes), ChangeKind::Mutation, receipt: $receipt, provenance: $origin);
             $ledger->appendCommit($sequence, $changes);
+            $committed = $sequence;
 
             return $result;
         });
+
+        // After the transaction, never inside it: a rollback must not announce a
+        // write that did not happen. A replay, a mutation gap or a refusal
+        // appends no commit and so signals nothing.
+        if ($committed !== null) {
+            try {
+                $this->observer->committed($mutation->entity->space, $committed);
+            } catch (\Throwable) {
+                // A notification cannot change the outcome of a write that has
+                // already happened. Letting it through would fail the caller's
+                // push for a mutation that is durably stored, so the client
+                // would retry, meet its own receipt, and be told the same thing
+                // again - noise for a write that was always fine.
+                //
+                // Delivery is at-most-once by contract and the reader's cursor
+                // is the backstop, so a broken notifier costs promptness, not
+                // correctness. Reporting it is the implementation's job: it is
+                // the half that has a logger.
+            }
+        }
+
+        return $result;
     }
 
     /** @return array<string, FieldVersion> */
