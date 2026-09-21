@@ -90,3 +90,56 @@ it('refuses a read whose history was pruned underneath it', function () {
         @unlink($database);
     }
 });
+
+/**
+ * Identifiers are client input, and the contract promises byte order. PHP
+ * compares two numeric strings numerically, so an in-memory store that uses
+ * array comparison orders them differently from any database - and treats
+ * distinct ids as equal, which is how a keyset page skips one entirely.
+ */
+it('orders identifiers by bytes, not by what they look like', function (Store $store) {
+    foreach (['9', '10', '100', '1e2', '2', '01'] as $id) {
+        seed($store, $id, [Op::set('status', 'open')]);
+    }
+
+    $found = array_map(fn ($record): string => $record->entity->id, $store->scanRecords('space', null, 50));
+
+    $expected = ['01', '1e2', '10', '100', '2', '9'];
+    sort($expected, SORT_STRING);
+
+    expect($found)->toBe($expected);
+})->with(parityStores());
+
+/**
+ * The same ids again, paged one at a time. A cursor that treats two distinct
+ * ids as equal drops the second, and the page still reports itself finished -
+ * so the delta never repairs it.
+ */
+it('pages every identifier exactly once', function (Store $store) {
+    $ids = ['9', '10', '100', '1e2', '2', '01'];
+    foreach ($ids as $id) {
+        seed($store, $id, [Op::set('status', 'open')]);
+    }
+
+    $seen = [];
+    $after = null;
+    while (($page = $store->scanRecords('space', $after, 1)) !== []) {
+        $seen[] = $page[0]->entity->id;
+        $after = $page[0]->entity;
+    }
+
+    sort($seen, SORT_STRING);
+    $expected = $ids;
+    sort($expected, SORT_STRING);
+
+    expect($seen)->toBe($expected);
+})->with(parityStores());
+
+/** A trailing space is a different identifier, and MySQL's PAD SPACE says otherwise. */
+it('keeps an identifier that differs only in trailing whitespace distinct', function (Store $store) {
+    seed($store, 'pad', [Op::set('status', 'open')]);
+    seed($store, 'pad ', [Op::set('status', 'closed')]);
+
+    expect($store->record(new EntityKey('space', 'notes', 'pad'))?->value('status')->value())->toBe('open');
+    expect($store->record(new EntityKey('space', 'notes', 'pad '))?->value('status')->value())->toBe('closed');
+})->with(parityStores());

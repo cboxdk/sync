@@ -43,7 +43,8 @@ class InMemoryStore implements Inspectable, Store
         $workspace = clone $this->state;
         try {
             $result = $callback($this->ledger($workspace, $space));
-            $this->beforeCommit($workspace);
+            $this->beforeCommit($space);
+            $this->beforePublish($workspace);
             $this->state = clone $workspace;
 
             return $result;
@@ -57,8 +58,23 @@ class InMemoryStore implements Inspectable, Store
         return new InMemoryLedger($workspace, $space);
     }
 
-    /** Adapter hook; failure here rolls back even results and acknowledgements. */
-    protected function beforeCommit(State $workspace): void {}
+    /**
+     * Adapter hook; failure here rolls back even results and acknowledgements.
+     *
+     * Deliberately the same signature the durable adapter offers. They differed
+     * before, so a fault-injecting store could only extend this one - and the
+     * rollback test, which proves the most important durability property here,
+     * had never run against a database on any driver.
+     */
+    protected function beforeCommit(string $space): void {}
+
+    /**
+     * The staged workspace, immediately before it becomes the published state.
+     *
+     * Only this adapter has one to offer, which is why it is separate from the
+     * hook above rather than folded into it.
+     */
+    protected function beforePublish(State $workspace): void {}
 
     public function snapshot(): State
     {
@@ -107,14 +123,29 @@ class InMemoryStore implements Inspectable, Store
             if ($criteria !== null && ! $criteria->matches($record)) {
                 continue;
             }
-            if ($after !== null && [$record->entity->type, $record->entity->id] <= [$after->type, $after->id]) {
+            if ($after !== null && self::compareKeys($record->entity, $after) <= 0) {
                 continue;
             }
             $records[] = $record;
         }
-        usort($records, fn (EntityRecord $left, EntityRecord $right): int => [$left->entity->type, $left->entity->id] <=> [$right->entity->type, $right->entity->id]);
+        usort($records, fn (EntityRecord $left, EntityRecord $right): int => self::compareKeys($left->entity, $right->entity));
 
         return array_slice($records, 0, $limit);
+    }
+
+    /**
+     * Byte order, which is what the contract promises and what every driver's
+     * binary collation gives.
+     *
+     * Not PHP's array comparison: it compares two numeric strings NUMERICALLY,
+     * so '9' sorts before '10' where a database puts it after, and '1e2' and
+     * '100' compare EQUAL - which makes the keyset filter below treat one of
+     * two distinct records as already passed and drop it from the page, while
+     * the page still reports itself finished.
+     */
+    private static function compareKeys(EntityKey $left, EntityKey $right): int
+    {
+        return strcmp($left->type, $right->type) ?: strcmp($left->id, $right->id);
     }
 
     public function record(EntityKey $entity): ?EntityRecord

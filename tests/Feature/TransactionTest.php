@@ -11,21 +11,24 @@ use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\Persistence\InMemoryStore;
-use Cbox\Sync\Testing\FailingStore;
+use Cbox\Sync\Testing\FailingStoreFactory;
 use Cbox\Sync\Testing\FakeIdGenerator;
 use Cbox\Sync\ValueObjects\RecordVersion;
 
 it('rolls back domain state conflicts receipts acknowledgements and feed then safely retries', function () {
-    $store = new FailingStore;
+    // Whichever adapter the suite is running against, so the rollback this
+    // pins is proven against a real database in CI and not only against an
+    // array.
+    $store = FailingStoreFactory::make();
     $this->store = $store;
     $this->engine = new Engine($store, ids: new FakeIdGenerator);
     $this->seedRecord();
     $this->write('a', 1, [Op::set('title', 'A')]);
-    $before = serialize($store->snapshot());
+    $before = $this->storeDigest();
     $mutation = $this->mutation('b', 1, [Op::set('title', 'B'), Op::set('body', 'new body')], atomic: false);
     $store->failNextCommit();
     expect(fn () => $this->engine->process($mutation))->toThrow(TransientFailure::class);
-    expect(serialize($store->snapshot()))->toBe($before);
+    expect($this->storeDigest())->toBe($before);
     $result = $this->engine->process($mutation);
     expect($result->acknowledgedSequence)->toBe(1);
     expect($result->commitSequence->value)->toBe(3);

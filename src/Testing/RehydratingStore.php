@@ -15,7 +15,7 @@ use Cbox\Sync\Persistence\State;
  */
 class RehydratingStore extends InMemoryStore
 {
-    protected function beforeCommit(State $workspace): void
+    protected function beforePublish(State $workspace): void
     {
         $rehydrated = unserialize(serialize($workspace));
         if (! $rehydrated instanceof State) {
