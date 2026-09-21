@@ -82,7 +82,12 @@ an incomplete object, and a nested one would otherwise pass a type check while
 being unusable, arriving as a record whose fields quietly no longer work.
 
 The exception is `sync_fields`, which exists purely so a view's field equality is
-an index lookup rather than a scan. It stores a hash of the canonical field
+an index lookup rather than a scan. Its index carries the keyset columns as well
+as the predicate, so one index both finds the matching records and hands them
+over in order - a selective page then costs the page rather than the space.
+Anchored on `sync_records` instead, the planner probes the field table once per
+record: measured 331ms for one page of a 32,000-record space, against 0.2ms this
+way. It stores a hash of the canonical field
 value, not the value, which keeps equality exact without depending on any
 database's JSON handling. Identity columns use a binary collation on every driver
 for the same reason: MySQL's default collation is case- and accent-insensitive

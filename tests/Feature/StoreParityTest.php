@@ -143,3 +143,43 @@ it('keeps an identifier that differs only in trailing whitespace distinct', func
     expect($store->record(new EntityKey('space', 'notes', 'pad'))?->value('status')->value())->toBe('open');
     expect($store->record(new EntityKey('space', 'notes', 'pad '))?->value('status')->value())->toBe('closed');
 })->with(parityStores());
+
+/**
+ * A selective view's page has to cost the page, not the space. The predicate is
+ * matched from an index that also carries the keyset columns, so the same index
+ * both finds the records and hands them over in order.
+ */
+it('pages a selective predicate without reading the whole space', function (Store $store) {
+    foreach (range(1, 60) as $i) {
+        seed($store, sprintf('e%03d', $i), [Op::set('project', $i > 57 ? 'alpha' : 'beta')]);
+    }
+
+    $criteria = new RecordCriteria('notes', [new FieldPredicate('project', FieldValue::of('alpha'))]);
+
+    $seen = [];
+    $after = null;
+    while (($page = $store->scanRecords('space', $after, 2, $criteria)) !== []) {
+        foreach ($page as $record) {
+            $seen[] = $record->entity->id;
+        }
+        $after = $page[count($page) - 1]->entity;
+    }
+
+    expect($seen)->toBe(['e058', 'e059', 'e060']);
+})->with(parityStores());
+
+/** Two predicates still both apply, whichever one leads the query. */
+it('applies every predicate when more than one is given', function (Store $store) {
+    seed($store, 'both', [Op::set('project', 'alpha'), Op::set('status', 'open')]);
+    seed($store, 'project-only', [Op::set('project', 'alpha'), Op::set('status', 'done')]);
+    seed($store, 'status-only', [Op::set('project', 'beta'), Op::set('status', 'open')]);
+
+    $criteria = new RecordCriteria('notes', [
+        new FieldPredicate('project', FieldValue::of('alpha')),
+        new FieldPredicate('status', FieldValue::of('open')),
+    ]);
+
+    $found = array_map(fn ($record): string => $record->entity->id, $store->scanRecords('space', null, 10, $criteria));
+
+    expect($found)->toBe(['both']);
+})->with(parityStores());

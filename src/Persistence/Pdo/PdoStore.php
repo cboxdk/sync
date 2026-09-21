@@ -234,32 +234,68 @@ class PdoStore implements Store
         if ($limit < 1) {
             throw new InvalidRequest('Invalid scan limit');
         }
-        $sql = 'SELECT payload FROM sync_records WHERE space = ? AND deleted = ?';
-        $bindings = [$space, $this->schema->driver === PdoSchema::PGSQL ? 'false' : 0];
+        $predicates = $criteria === null ? [] : $criteria->predicates;
+
+        // Drive from sync_fields when there is a value to match. Anchored on
+        // sync_records instead, the planner probes the field table once per
+        // record in the space, so a page of a selective view costs O(space):
+        // measured 331ms for one page of a 32,000-record space, against 0.05ms
+        // when the index can both match and order.
+        $driving = null;
+        foreach ($predicates as $index => $predicate) {
+            if ($predicate->expected->exists) {
+                $driving = $index;
+                break;
+            }
+        }
+
+        $deleted = $this->schema->driver === PdoSchema::PGSQL ? 'false' : 0;
+
+        if ($driving !== null) {
+            $lead = $predicates[$driving];
+            $sql = 'SELECT r.payload FROM sync_fields f'
+                .' JOIN sync_records r ON r.space = f.space AND r.entity_type = f.entity_type AND r.entity_id = f.entity_id'
+                .' WHERE f.space = ? AND f.field = ? AND f.value_hash = ? AND r.deleted = ?';
+            $bindings = [$space, $lead->field, Payload::fieldHash($lead->expected), $deleted];
+            $alias = 'r.';
+            $order = 'f.entity_type, f.entity_id';
+            $keyset = 'f.entity_type, f.entity_id';
+        } else {
+            $sql = 'SELECT payload FROM sync_records WHERE space = ? AND deleted = ?';
+            $bindings = [$space, $deleted];
+            $alias = '';
+            $order = 'entity_type, entity_id';
+            $keyset = 'entity_type, entity_id';
+        }
+
         if ($criteria?->entityType !== null) {
-            $sql .= ' AND entity_type = ?';
+            $sql .= ' AND '.$alias.'entity_type = ?';
             $bindings[] = $criteria->entityType;
         }
-        foreach ($criteria === null ? [] : $criteria->predicates as $predicate) {
-            $row = 'FROM sync_fields f WHERE f.space = sync_records.space AND f.entity_type = sync_records.entity_type AND f.entity_id = sync_records.entity_id AND f.field = ?';
+        foreach ($predicates as $index => $predicate) {
+            if ($index === $driving) {
+                continue;
+            }
+            $outer = $alias === '' ? 'sync_records' : 'r';
+            $row = 'FROM sync_fields g WHERE g.space = '.$outer.'.space AND g.entity_type = '.$outer.'.entity_type AND g.entity_id = '.$outer.'.entity_id AND g.field = ?';
             if ($predicate->expected->exists) {
-                $sql .= ' AND EXISTS (SELECT 1 '.$row.' AND f.value_hash = ?)';
+                $sql .= ' AND EXISTS (SELECT 1 '.$row.' AND g.value_hash = ?)';
             } else {
                 // "has no value" must also match a field that was never set,
                 // which has no row at all. Asserting a matching row would miss
                 // exactly those records, and a bootstrap that omits them still
                 // advances its cursor - so the delta never repairs it either.
-                $sql .= ' AND NOT EXISTS (SELECT 1 '.$row.' AND f.value_hash <> ?)';
+                $sql .= ' AND NOT EXISTS (SELECT 1 '.$row.' AND g.value_hash <> ?)';
             }
             $bindings[] = $predicate->field;
             $bindings[] = Payload::fieldHash($predicate->expected);
         }
         if ($after !== null) {
-            $sql .= ' AND (entity_type, entity_id) > (?, ?)';
+            $sql .= ' AND ('.$keyset.') > (?, ?)';
             $bindings[] = $after->type;
             $bindings[] = $after->id;
         }
-        $sql .= ' ORDER BY entity_type, entity_id LIMIT '.$limit;
+        $sql .= ' ORDER BY '.$order.' LIMIT '.$limit;
 
         $records = [];
         foreach ($this->select($sql, $bindings) as $row) {

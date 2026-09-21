@@ -247,7 +247,18 @@ class PdoSchema
                 ],
                 'primaryKey' => ['space', 'entity_type', 'entity_id', 'field'],
                 'indexes' => [
-                    ['name' => 'sync_fields_lookup', 'unique' => false, 'columns' => ['space', 'field', 'value_hash']],
+                    // Carries the keyset columns so a view's predicate can both
+                    // MATCH and ORDER from one index: without them the planner
+                    // drives from sync_records and probes this table once per
+                    // record in the space, which makes a selective bootstrap
+                    // page cost O(space) instead of O(page).
+                    //
+                    // Named apart from the sync_fields_lookup it replaces, so an
+                    // existing installation gains it by reconciliation rather
+                    // than by dropping and rebuilding an index on a live table
+                    // during a migration. The old one is a strict prefix of this
+                    // one and can be dropped whenever the host chooses.
+                    ['name' => 'sync_fields_view', 'unique' => false, 'columns' => ['space', 'field', 'value_hash', 'entity_type', 'entity_id']],
                 ],
             ],
             [
