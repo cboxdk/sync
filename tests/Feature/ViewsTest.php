@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Exceptions\InvalidRequest;
+use Cbox\Sync\Persistence\InMemoryStore;
 use Cbox\Sync\Testing\ClientStateFactory;
 use Cbox\Sync\Tests\Fixtures\ViewScenario;
 use Cbox\Sync\ValueObjects\CommitSequence;
 use Cbox\Sync\Views\BootstrapToken;
 use Cbox\Sync\Views\CursorContext;
 use Cbox\Sync\Views\FieldEqualsView;
+use Cbox\Sync\Views\FrozenBootstrapSessions;
 use Cbox\Sync\Views\MultiViewClient;
 use Cbox\Sync\Views\ResetReason;
 use Cbox\Sync\Views\ResetRequired;
@@ -306,4 +308,32 @@ it('binds client application to page context and atomically deduplicates each vi
     $unrelated = $sync->delta(new ViewCursor($sync->context('test', $other)), $other);
     expect(fn () => $client->applyDelta($unrelated))->toThrow(InvalidRequest::class);
     expect($client->cursor($bootstrap->context)?->position->value)->toBe($second->cursor->position->value);
+});
+
+/**
+ * Every frozen session holds a fully materialized view and nothing ever removed
+ * one, so a long-lived process accumulated them until it ran out of memory.
+ * Dropping the oldest is also what makes BootstrapSessionExpired an outcome a
+ * client can meet, rather than a branch that could never be taken.
+ */
+it('drops the oldest frozen bootstrap rather than growing for ever', function () {
+    $scenario = new ViewScenario;
+    $scenario->create('a', 'alpha');
+    $view = FieldEqualsView::matching('project-alpha', 'v1', 'project', 'alpha', 'items');
+
+    $sessions = new FrozenBootstrapSessions($scenario->store, retainedSessions: 2);
+    $sync = new ViewSyncService($scenario->store, 'schema-1', 'epoch-1', $sessions);
+    $context = $sync->context('test', $view);
+
+    $first = $sync->openBootstrap($context, $view, 1);
+    $sync->openBootstrap($context, $view, 1);
+    $sync->openBootstrap($context, $view, 1);
+
+    expect(fn () => $sync->bootstrap($context, $view, $first))
+        ->toThrow(ResetRequired::class);
+});
+
+it('refuses to retain nothing', function () {
+    expect(fn () => new FrozenBootstrapSessions(new InMemoryStore, retainedSessions: 0))
+        ->toThrow(InvalidRequest::class);
 });

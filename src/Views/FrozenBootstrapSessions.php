@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Cbox\Sync\Views;
 
 use Cbox\Sync\Contracts\Store;
+use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\ValueObjects\CommitSequence;
 
 /**
@@ -23,7 +24,22 @@ class FrozenBootstrapSessions implements BootstrapSessions
     /** @var array<string, BootstrapRequest> */
     private array $tokens = [];
 
-    public function __construct(private Store $store) {}
+    /**
+     * @param  int  $retainedSessions  How many frozen bootstraps to keep at once.
+     *
+     * Every session holds a fully materialized view, and nothing ever removed
+     * one: a long-lived process - a queue worker, Octane, the engine used
+     * directly - accumulated one per bootstrap until it ran out of memory. The
+     * oldest is dropped when the limit is reached, which is what makes
+     * BootstrapSessionExpired an outcome a client can actually meet rather than
+     * a branch that could never be taken.
+     */
+    public function __construct(private Store $store, private int $retainedSessions = 32)
+    {
+        if ($retainedSessions < 1) {
+            throw new InvalidRequest('At least one bootstrap session must be retained');
+        }
+    }
 
     public function open(CursorContext $context, ViewDefinition $view, CommitSequence $watermark, int $pageSize): BootstrapToken
     {
@@ -44,8 +60,26 @@ class FrozenBootstrapSessions implements BootstrapSessions
         }
         $sessionId = bin2hex(random_bytes(16));
         $this->sessions[$sessionId] = new BootstrapSession($context, $records, $watermark, $pageSize);
+        $this->forgetOldestBeyondLimit();
 
         return $this->token($sessionId, 0);
+    }
+
+    /** Oldest first, with the tokens that named them, so neither map outlives the other. */
+    private function forgetOldestBeyondLimit(): void
+    {
+        while (count($this->sessions) > $this->retainedSessions) {
+            $oldest = array_key_first($this->sessions);
+            if ($oldest === null) {
+                return;
+            }
+            unset($this->sessions[$oldest]);
+            foreach ($this->tokens as $value => $request) {
+                if ($request->sessionId === $oldest) {
+                    unset($this->tokens[$value]);
+                }
+            }
+        }
     }
 
     public function page(BootstrapToken $token, ViewDefinition $view): BootstrapPage

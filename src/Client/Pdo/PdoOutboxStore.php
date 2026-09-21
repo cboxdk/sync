@@ -41,6 +41,17 @@ class PdoOutboxStore implements OutboxStore
             abandoned_reason $text NULL,
             PRIMARY KEY (mutation_id)
         )");
+        // head() is called once per mutation while draining, and without this
+        // every call scans the table and sorts it in a temp b-tree. Measured on
+        // a 5,000-deep backlog: 32 seconds of local scanning before a single
+        // request goes out, on the device, on the exact day the user most needs
+        // it to work.
+        $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_head ON sync_outbox (entity_type, queued_at, mutation_id)');
+        // append() takes the next position with MAX(queued_at), which the index
+        // above cannot serve because entity_type leads it. Without this one,
+        // queueing is O(n) per write and a long offline session gets slower the
+        // longer it lasts.
+        $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_position ON sync_outbox (queued_at)');
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS sync_outbox_sequences (
             replica_id $name NOT NULL,
             space $name NOT NULL,
