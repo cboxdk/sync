@@ -80,4 +80,21 @@ interface Store
 
     /** Lowest retained sequence: one when nothing has been pruned, zero when the space is empty. */
     public function retainedFrom(string $space): CommitSequence;
+
+    /**
+     * Drop commits below $from, and raise the space's retention horizon to it.
+     *
+     * The log is the only thing here that grows without bound, and a host given
+     * this contract had no way to reach the pruning both shipped adapters
+     * already implemented - so there was no supported way to stop a busy tenant
+     * filling the disk. It belongs on the contract for that reason.
+     *
+     * A reader whose cursor falls below the new horizon is told to rebuild
+     * rather than served a gap: prune only past what every device has already
+     * acknowledged, or accept that the slow ones re-bootstrap.
+     *
+     * Acknowledgement rows are NOT pruned by this. They are what makes a
+     * replayed mutation safe, and one is kept per replica per space.
+     */
+    public function prune(string $space, CommitSequence $from): void;
 }
