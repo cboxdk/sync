@@ -112,6 +112,13 @@ interface OutboxStore
     /** Moves a mutation out of the queue permanently, with why. */
     public function abandon(string $mutationId, string $reason): void;
 
+    /**
+     * One abandoned write and its reason, or null.
+     *
+     * @return array{mutation: Mutation, reason: string}|null
+     */
+    public function abandonedOne(string $mutationId): ?array;
+
     /** @return list<array{mutation: Mutation, reason: string}> */
     public function abandoned(): array;
 

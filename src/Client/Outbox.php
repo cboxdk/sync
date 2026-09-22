@@ -701,19 +701,25 @@ class Outbox
      * will never exist, and once its abandoned entry is gone nothing else says
      * so - its edits, and children pointing at it or living under it, would go
      * out carrying a handle the server never heard of. They are abandoned as
-     * parent_abandoned, for the application to report in turn.
+     * parent_abandoned (parent_unknown when the create may have landed), for
+     * the application to report in turn; the count of them is returned.
      *
      * @param  array<string, array<string, string>>|null  $references  as for acknowledged(); null for what relatedBy() set
      * @param  array<string, string>|null  $scopedBy  as for acknowledged(); null for what relatedBy() set
      */
-    public function dismiss(string $mutationId, ?array $references = null, ?array $scopedBy = null): void
+    public function dismiss(string $mutationId, ?array $references = null, ?array $scopedBy = null): int
     {
         $references ??= $this->references;
         $scopedBy ??= $this->scopedBy;
-        $this->store->transaction(function () use ($mutationId, $references, $scopedBy): void {
-            foreach ($this->store->abandoned() as $entry) {
+
+        return $this->store->transaction(function () use ($mutationId, $references, $scopedBy): int {
+            // One row, not every abandoned write decoded: a restored stream
+            // settles hundreds, and an application dismisses each in turn.
+            $entry = $this->store->abandonedOne($mutationId);
+            $cascaded = 0;
+            if ($entry !== null) {
                 $old = $entry['mutation'];
-                if ($old->id === $mutationId && $old->kind === MutationKind::Create && $this->queuedCreate($old->entity->type, $old->entity->id) === null) {
+                if ($old->kind === MutationKind::Create && $this->queuedCreate($old->entity->type, $old->entity->id) === null) {
                     // Whether or not the record exists, this device never
                     // learned its name, so the writes that need it would go
                     // out carrying a handle the server never heard of. When it
@@ -722,10 +728,13 @@ class Outbox
                     $mayHaveLanded = in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->unanswered($old->id) > 0;
                     foreach ($this->dependents($old->entity, $references, $scopedBy) as $dependent) {
                         $this->store->abandon($dependent->id, $mayHaveLanded ? 'parent_unknown' : 'parent_abandoned');
+                        $cascaded++;
                     }
                 }
             }
             $this->store->dismiss($mutationId);
+
+            return $cascaded;
         });
     }
 

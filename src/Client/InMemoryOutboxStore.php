@@ -229,6 +229,17 @@ class InMemoryOutboxStore implements OutboxStore
         return $this->abandoned;
     }
 
+    public function abandonedOne(string $mutationId): ?array
+    {
+        foreach ($this->abandoned as $entry) {
+            if ($entry['mutation']->id === $mutationId) {
+                return $entry;
+            }
+        }
+
+        return null;
+    }
+
     public function dismiss(string $mutationId): void
     {
         $this->abandoned = array_values(array_filter(

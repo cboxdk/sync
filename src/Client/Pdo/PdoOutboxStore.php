@@ -342,6 +342,18 @@ class PdoOutboxStore implements OutboxStore
         $this->run('DELETE FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NOT NULL', [$mutationId]);
     }
 
+    public function abandonedOne(string $mutationId): ?array
+    {
+        $statement = $this->pdo->prepare('SELECT payload, abandoned_reason FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NOT NULL');
+        $statement->execute([$mutationId]);
+        $row = $statement->fetch(\PDO::FETCH_NUM);
+        if (! is_array($row) || ! is_string($row[0] ?? null) || ! is_string($row[1] ?? null)) {
+            return null;
+        }
+
+        return ['mutation' => Payload::decode($row[0], Mutation::class), 'reason' => $row[1]];
+    }
+
     public function abandoned(): array
     {
         $statement = $this->pdo->prepare('SELECT payload, abandoned_reason FROM sync_outbox WHERE abandoned_reason IS NOT NULL ORDER BY queued_at, mutation_id');
