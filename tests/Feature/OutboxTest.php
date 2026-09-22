@@ -530,3 +530,15 @@ it('refuses a rename that changes the space or type', function (OutboxStore $sto
     expect(fn () => $outbox->rekey(note('a'), new EntityKey('team-2', 'notes', 'a')))->toThrow(InvalidRequest::class)
         ->and(fn () => $outbox->rekey(note('a'), new EntityKey('team-1', 'tasks', 'a')))->toThrow(InvalidRequest::class);
 })->with(outboxStores());
+
+/** A handle is the device's own; a child in one scope may point at a parent created in another. */
+it('rewrites a reference to a record created in another scope', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $project = new EntityKey('team-1', 'projects', 'p-handle');
+    $outbox->queue($project, MutationKind::Create, [Op::set('name', 'Launch')], 0);
+    $outbox->queue(new EntityKey('other-scope', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p-handle')], 0);
+
+    $outbox->acknowledged($outbox->head('projects') ?? throw new LogicException('expected the project'), new EntityKey('team-1', 'projects', 'p-real'), ['tasks' => ['project_id' => 'projects']]);
+
+    expect($outbox->head('tasks')?->operations[0]->value->value())->toBe('p-real');
+})->with(outboxStores());

@@ -253,15 +253,15 @@ class PdoOutboxStore implements OutboxStore
         return $names;
     }
 
-    public function queued(string $space, array $entityTypes): array
+    public function queued(array $entityTypes): array
     {
         if ($entityTypes === []) {
             return [];
         }
         $mutations = [];
-        $sql = 'SELECT mutation_id, payload FROM sync_outbox WHERE abandoned_reason IS NULL AND space = ? AND entity_type IN ('
+        $sql = 'SELECT mutation_id, payload FROM sync_outbox WHERE abandoned_reason IS NULL AND entity_type IN ('
             .implode(', ', array_fill(0, count($entityTypes), '?')).') ORDER BY queued_at, mutation_id';
-        foreach ($this->rows($sql, [$space, ...$entityTypes]) as $row) {
+        foreach ($this->rows($sql, $entityTypes) as $row) {
             $mutations[] = Payload::decode($row[1], Mutation::class);
         }
 

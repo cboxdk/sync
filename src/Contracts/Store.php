@@ -95,9 +95,10 @@ interface Store
      *
      * Receipts written in the dropped commits go with them. A receipt is what
      * answers a replayed mutation, so a device that retries one after this
-     * point - it lost the response and stayed away past the horizon - is told
-     * its sequence was already used, and must treat the write as final
-     * without knowing how it ended. Keep enough history to outlast the
+     * point - it lost the response and stayed away past the horizon - is
+     * refused as final, never renumbered: it cannot be told apart from a new
+     * write, and applying it again would be worse than not knowing how it
+     * ended. Keep enough history to outlast the
      * longest a device can be away with an unanswered push.
      *
      * Acknowledgement rows are NOT pruned by this: one per replica per space,

@@ -212,8 +212,8 @@ class Outbox
      * never existed.
      *
      * Only a value that is exactly the handle, in a field declared to point at
-     * the created record's type, in the same space, is touched - handles are
-     * the device's own and two types may well use the same one.
+     * the created record's type, is touched - two types may well use the same
+     * handle, so the type is what tells them apart.
      *
      * @param  array<string, array<string, string>>  $references
      */
@@ -231,7 +231,9 @@ class Outbox
                 $types[] = $type;
             }
         }
-        foreach ($this->store->queued($handle->space, $types) as $queued) {
+        // Every scope: a handle is the device's own, and a child in one scope
+        // may well point at a parent created in another.
+        foreach ($this->store->queued($types) as $queued) {
             $fields = array_keys(array_filter($references[$queued->entity->type] ?? [], fn (string $target): bool => $target === $handle->type));
             if ($fields === []) {
                 continue;

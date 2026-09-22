@@ -20,7 +20,9 @@ use Cbox\Sync\ValueObjects\Replica;
 it('rejects spoofed dependencies across replicas entities and spaces', function () {
     $this->seedRecord();
     $this->write('a', 1, [Op::set('title', 'A')]);
-    expect(fn () => $this->write('b', 1, [Op::set('title', 'B')], dependsOn: 'a-1'))->toThrow(InvalidRequest::class);
+    // Another replica's mutation grants nothing: the write is judged on its own
+    // base, so it meets a-1's title as a conflict instead of overwriting it.
+    expect($this->write('b', 1, [Op::set('title', 'B')], dependsOn: 'a-1')->status)->toBe(MutationStatus::Conflict);
     $this->key = new EntityKey('test', 'notes', 'other');
     expect(fn () => $this->write('a', 2, [], 0, dependsOn: 'a-1'))->toThrow(InvalidRequest::class);
     $this->key = new EntityKey('other-space', 'notes', 'one');

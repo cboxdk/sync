@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Enums\MutationStatus;
 use Cbox\Sync\Exceptions\HistoryUnavailable;
+use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Persistence\InMemoryStore;
 use Cbox\Sync\Tests\Fixtures\ViewScenario;
 use Cbox\Sync\ValueObjects\CommitSequence;
@@ -93,24 +94,21 @@ it('prunes the receipts written in the commits it drops, and keeps the rest', fu
 });
 
 /**
- * Past the horizon a replay has no receipt to be answered from. It is told
- * where the stream is and applies nothing; a writer that renumbers and sends
- * it again is judged on its old base, so it meets the newer value as a
- * conflict rather than overwriting it.
+ * Past the horizon a replay has no receipt to be answered from, and it cannot
+ * be told apart from a new write. It is refused as final - never renumbered,
+ * which would apply it a second time over whatever came after it.
  */
-it('does not apply a replay whose receipt was pruned', function () {
+it('refuses a replay whose receipt was pruned instead of applying it again', function () {
     $this->seedRecord();
     $this->write('a', 1, [Op::set('title', 'once')]);
     $this->write('a', 2, [Op::set('title', 'twice')], base: 2);
     $this->store->prune('test', new CommitSequence(3));
 
-    $replay = $this->write('a', 1, [Op::set('title', 'once')]);
-    expect($replay->status)->toBe(MutationStatus::MutationGap)
-        ->and($this->record()->value('title')->value())->toBe('twice');
+    expect(fn () => $this->write('a', 1, [Op::set('title', 'once')]))->toThrow(ProtocolException::class, 'pruned');
+    expect($this->record()->value('title')->value())->toBe('twice');
 
-    $renumbered = $this->write('a', 3, [Op::set('title', 'once')]);
-    expect($renumbered->status)->toBe(MutationStatus::Conflict)
-        ->and($this->record()->value('title')->value())->toBe('twice');
+    // A number past what was pruned is still just a writer that is behind.
+    expect($this->write('a', 3, [Op::set('title', 'next')], base: 3)->status)->toBe(MutationStatus::Applied);
 });
 
 /** A dependency pruned with the log is no knowledge, not a refusal. */

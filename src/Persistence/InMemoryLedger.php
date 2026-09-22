@@ -39,6 +39,11 @@ class InMemoryLedger implements Ledger
         return $this->state->receipts[$mutationId] ?? null;
     }
 
+    public function prunedThrough(Replica $replica): int
+    {
+        return $this->state->prunedThrough[$replica->stream($this->space)] ?? 0;
+    }
+
     public function acknowledged(Replica $replica): int
     {
         return $this->state->acknowledged[$replica->stream($this->space)] ?? 0;

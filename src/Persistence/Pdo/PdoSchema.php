@@ -346,6 +346,9 @@ class PdoSchema
                     "space $name NOT NULL",
                     "replica_id $name NOT NULL",
                     'acknowledged BIGINT NOT NULL',
+                    // What the stream had acknowledged when its receipts were
+                    // last pruned: see Ledger::prunedThrough().
+                    'pruned_through BIGINT NOT NULL DEFAULT 0',
                 ],
                 'primaryKey' => ['space', 'replica_id'],
                 'indexes' => [],

@@ -29,6 +29,9 @@ class State
     /** @var array<string, int> */
     public array $acknowledged = [];
 
+    /** @var array<string, int> stream => acknowledged when its receipts were last pruned */
+    public array $prunedThrough = [];
+
     /** @var array<string, list<Commit>> */
     public array $commits = [];
 

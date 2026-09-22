@@ -114,14 +114,14 @@ interface OutboxStore
     public function pending(?string $entityType = null): int;
 
     /**
-     * Mutations still queued in one space, of the given entity types, oldest
-     * first. Narrowed by the store, so a large backlog of unrelated writes is
-     * never decoded.
+     * Mutations still queued, of the given entity types, oldest first.
+     * Narrowed by the store, so a large backlog of unrelated writes is never
+     * decoded.
      *
      * @param  list<string>  $entityTypes
      * @return list<Mutation>
      */
-    public function queued(string $space, array $entityTypes): array;
+    public function queued(array $entityTypes): array;
 
     /**
      * @template TResult

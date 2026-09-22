@@ -63,6 +63,11 @@ class Engine
                 return $receipt->result;
             }
             $ack = $ledger->acknowledged($mutation->replica);
+            if ($mutation->sequence->value <= $ack && $mutation->sequence->value <= $ledger->prunedThrough($mutation->replica)) {
+                // Could be a replay whose answer was pruned. Renumbering it
+                // would apply it twice, so it is refused as final instead.
+                throw new ProtocolException('This mutation may already have been applied, and its receipt has been pruned');
+            }
             if ($mutation->sequence->value <= $ack) {
                 // A number this stream already used, under an identity with no
                 // receipt: the writer is BEHIND - its state restored from an
@@ -217,7 +222,12 @@ class Engine
             // Refusing it used to abandon a legitimate write after a prune.
             return [];
         }
-        if ($previous->mutation->replica->id !== $mutation->replica->id || $previous->mutation->entity->key() !== $mutation->entity->key() || $previous->mutation->sequence->value >= $mutation->sequence->value) {
+        if ($previous->mutation->replica->id !== $mutation->replica->id) {
+            // Another of the writer's streams - a write queued before an
+            // upgrade split them. Inheriting nothing is safe; refusing lost it.
+            return [];
+        }
+        if ($previous->mutation->entity->key() !== $mutation->entity->key() || $previous->mutation->sequence->value >= $mutation->sequence->value) {
             throw new InvalidRequest('Dependency must be a processed earlier mutation for the same replica, space and entity');
         }
 

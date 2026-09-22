@@ -47,6 +47,13 @@ class PdoLedger implements Ledger
         return $payload === null ? null : Payload::decode($payload, Receipt::class);
     }
 
+    public function prunedThrough(Replica $replica): int
+    {
+        $value = $this->scalar('SELECT pruned_through FROM sync_streams WHERE space = ? AND replica_id = ?', [$this->space, $replica->id]);
+
+        return $value === null ? 0 : (int) $value;
+    }
+
     public function acknowledged(Replica $replica): int
     {
         $value = $this->scalar('SELECT acknowledged FROM sync_streams WHERE space = ? AND replica_id = ?', [$this->space, $replica->id]);

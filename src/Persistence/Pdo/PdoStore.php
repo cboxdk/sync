@@ -210,6 +210,10 @@ class PdoStore implements Store
             $this->run('UPDATE sync_spaces SET retained_from = ? WHERE space = ? AND retained_from < ?', [$from->value, $space, $from->value]);
             $this->run('DELETE FROM sync_commits WHERE space = ? AND sequence < ?', [$space, $from->value]);
             $this->run('DELETE FROM sync_receipts WHERE space = ? AND commit_sequence < ?', [$space, $from->value]);
+            // Over-approximates on purpose: every sequence a stream has had
+            // acknowledged may have lost its receipt. One that still has it is
+            // answered from it before this mark is ever consulted.
+            $this->run('UPDATE sync_streams SET pruned_through = acknowledged WHERE space = ?', [$space]);
 
             return true;
         });

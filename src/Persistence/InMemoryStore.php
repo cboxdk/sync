@@ -206,6 +206,12 @@ class InMemoryStore implements Inspectable, Store
             }
         }
         $this->state->commits[$space] = $retained;
+        foreach ($this->state->acknowledged as $stream => $sequence) {
+            $decoded = unserialize($stream, ['allowed_classes' => false]);
+            if (is_array($decoded) && ($decoded[0] ?? null) === $space) {
+                $this->state->prunedThrough[$stream] = $sequence;
+            }
+        }
         foreach ($this->state->receipts as $id => $receipt) {
             $sequence = $receipt->result->commitSequence;
             if ($sequence !== null && $sequence->value < $from->value && $this->receiptSpace($receipt) === $space) {

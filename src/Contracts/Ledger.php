@@ -33,6 +33,15 @@ interface Ledger
 
     public function acknowledged(Replica $replica): int;
 
+    /**
+     * The highest sequence of this replica whose receipt may have been pruned.
+     *
+     * Below it, a mutation with no receipt cannot be told apart from a replay
+     * of one that was applied and whose answer is gone - so it is refused
+     * rather than renumbered, which would apply it a second time.
+     */
+    public function prunedThrough(Replica $replica): int;
+
     public function record(EntityKey $entity): ?EntityRecord;
 
     public function group(string $id): ?ConflictGroup;
