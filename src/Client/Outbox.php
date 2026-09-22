@@ -481,11 +481,30 @@ class Outbox
      * Jumping to the server's position instead renumbered those replays past
      * the pruned range, and they were applied a second time.
      */
-    public function settledUnknown(Mutation $mutation): void
+    public function settledUnknown(Mutation $mutation, ?int $serverAcknowledged = null): void
     {
-        $this->store->transaction(function () use ($mutation): void {
-            $this->store->setAcknowledged($mutation->replica, $mutation->entity->space, $mutation->sequence->value);
+        $this->store->transaction(function () use ($mutation, $serverAcknowledged): void {
+            $space = $mutation->entity->space;
             $this->store->abandon($mutation->id, 'receipt_pruned');
+            if ($serverAcknowledged === null || $serverAcknowledged <= $mutation->sequence->value) {
+                $this->store->setAcknowledged($mutation->replica, $space, $mutation->sequence->value);
+
+                return;
+            }
+            // The server has seen MORE of this stream than this device knows:
+            // the device's state was restored from a backup, or its id reused
+            // by a new installation. Every write still queued on the stream may
+            // be one it had sent before, applied at a position whose answer is
+            // gone - so each is settled the same way, now, together. Burning
+            // one position per write instead left a restored device unable to
+            // write anything new until it had crawled through the whole pruned
+            // range. New writes then go out after where the server really is.
+            foreach ($this->store->queued([$mutation->entity->type]) as $queued) {
+                if ($queued->replica->id === $mutation->replica->id && $queued->entity->space === $space) {
+                    $this->store->abandon($queued->id, 'receipt_pruned');
+                }
+            }
+            $this->store->resetAcknowledged($mutation->replica, $space, $serverAcknowledged, $mutation->sequence->value - 1);
         });
     }
 

@@ -77,16 +77,26 @@ class Engine
      * MySQL's REPEATABLE READ a host transaction's snapshot kept every retry
      * reading the same stale number.
      *
+     * $asCreate is what to write when the log turns out to hold no record -
+     * every field, for a row that existed before it was synced - where
+     * $operations carries only what this write changed.
+     *
+     * $echoOf names a mutation this write is the direct consequence of: what
+     * the host's table made of a device's write. Its versions are added to
+     * that mutation's answer, so the writer's next edit, based on that answer,
+     * does not conflict with its own write's echo.
+     *
      * @param  list<FieldOperation>  $operations
      * @param  list<int>|null  $acceptVersions  versions the caller accepts the record at - If-Match - or null for none
      * @param  int|null  $claimedBase  the version the caller says it was looking at, for field-level checks
+     * @param  list<FieldOperation>|null  $asCreate
      * @return MutationResult|null null for a delete of a record the log never held
      */
-    public function recordTrusted(EntityKey $entity, Replica $replica, array $operations, bool $deleting, AdapterContext $context = new AdapterContext, ?array $acceptVersions = null, ?int $claimedBase = null, OnConflict $onConflict = OnConflict::Pull): ?MutationResult
+    public function recordTrusted(EntityKey $entity, Replica $replica, array $operations, bool $deleting, AdapterContext $context = new AdapterContext, ?array $acceptVersions = null, ?int $claimedBase = null, OnConflict $onConflict = OnConflict::Pull, ?array $asCreate = null, ?string $echoOf = null): ?MutationResult
     {
         $committed = null;
         $mutationSpace = $entity->space;
-        $result = $this->store->transaction($mutationSpace, function (Ledger $ledger) use ($entity, $replica, $operations, $deleting, $context, $acceptVersions, $claimedBase, $onConflict, &$committed): ?MutationResult {
+        $result = $this->store->transaction($mutationSpace, function (Ledger $ledger) use ($entity, $replica, $operations, $deleting, $context, $acceptVersions, $claimedBase, $onConflict, $asCreate, $echoOf, &$committed): ?MutationResult {
             $current = $ledger->record($entity);
             if ($deleting && ($current === null || $current->deleted)) {
                 return null;
@@ -98,8 +108,14 @@ class Engine
             };
             $stored = $current?->version->value ?? 0;
             $expected = null;
-            if ($acceptVersions !== null && $kind !== MutationKind::Create) {
-                $expected = in_array($stored, $acceptVersions, true) ? $stored : ($acceptVersions[0] ?? 0);
+            if ($acceptVersions !== null) {
+                // A record the log does not hold is at version 0: If-Match
+                // naming any version of it fails, as HTTP says it must.
+                // An empty list can never match, so it names the next version.
+                $expected = in_array($stored, $acceptVersions, true) ? $stored : ($acceptVersions[0] ?? $stored + 1);
+            }
+            if ($kind === MutationKind::Create && $asCreate !== null) {
+                $operations = $asCreate;
             }
             $base = $kind === MutationKind::Create ? 0 : min($expected ?? $claimedBase ?? $stored, $stored);
 
@@ -115,11 +131,38 @@ class Engine
             );
             Identifier::checkMutation($mutation);
 
-            return $this->within($ledger, $mutation, $context, $onConflict, $committed);
+            $result = $this->within($ledger, $mutation, $context, $onConflict, $committed);
+            if ($echoOf !== null && in_array($result->status, [MutationStatus::Applied, MutationStatus::Partial], true)) {
+                $this->amendWithEcho($ledger, $echoOf, $entity, $result);
+            }
+
+            return $result;
         });
         $this->announce($mutationSpace, $committed);
 
         return $result;
+    }
+
+    /**
+     * Fold an echo's versions into the answer of the write that caused it:
+     * the record version it reached, and each field it set as a version the
+     * writer now knows. A replay of that write is answered the same way.
+     */
+    private function amendWithEcho(Ledger $ledger, string $cause, EntityKey $entity, MutationResult $echo): void
+    {
+        $receipt = $ledger->receipt($cause, latest: true);
+        if ($receipt === null || $receipt->mutation->entity->key() !== $entity->key()) {
+            return;
+        }
+        $known = $receipt->result->acceptedVersions;
+        foreach ($echo->acceptedVersions as $field => $version) {
+            $known[$field] = $version;
+        }
+        $was = $receipt->result;
+        $ledger->amendReceipt(new Receipt($receipt->mutation, new MutationResult(
+            $was->status, $echo->recordVersion, $was->commitSequence, $was->reason, $was->decisions, $known,
+            $was->conflictGroupIds, $was->acknowledgedSequence, $was->preconditionFailure, $was->validation, $was->conflicts,
+        ), $receipt->provenance));
     }
 
     private function announce(string $space, ?CommitSequence $committed): void
@@ -148,6 +191,15 @@ class Engine
     private function within(Ledger $ledger, Mutation $mutation, AdapterContext $context, OnConflict $onConflict, ?CommitSequence &$committed): MutationResult
     {
         $receipt = $ledger->receipt($mutation->id);
+        $ack = $ledger->acknowledged($mutation->replica);
+        if ($receipt === null && $mutation->sequence->value <= $ack) {
+            // A position already used and no receipt: most likely a replay
+            // whose first delivery committed after this transaction's
+            // snapshot was taken - a host transaction that read before the
+            // space lock. Asked again, for the latest committed answer, before
+            // it is judged a writer that fell behind.
+            $receipt = $ledger->receipt($mutation->id, latest: true);
+        }
         if ($receipt !== null) {
             if ($receipt->mutation->fingerprint() !== $mutation->fingerprint() || $receipt->provenance->actorId !== $context->actorId || $receipt->provenance->integrationId !== $context->integrationId) {
                 throw new ProtocolException('Mutation identity reused with different content');
@@ -155,7 +207,6 @@ class Engine
 
             return $receipt->result;
         }
-        $ack = $ledger->acknowledged($mutation->replica);
         if ($mutation->sequence->value <= $ack && $mutation->sequence->value <= $ledger->prunedThrough($mutation->replica)) {
             // A position whose receipt was pruned: this could be a replay
             // of a write that was applied, and renumbering it would apply
@@ -287,7 +338,7 @@ class Engine
         if ($mutation->dependsOn === null) {
             return [];
         }
-        $previous = $ledger->receipt($mutation->dependsOn);
+        $previous = $ledger->receipt($mutation->dependsOn, latest: true);
         if ($previous === null) {
             // Unknown - never processed, or its receipt pruned with the log.
             // Either way there is no knowledge to inherit, and inheriting none

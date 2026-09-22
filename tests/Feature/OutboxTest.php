@@ -629,6 +629,30 @@ it('settles a pruned replay at its own position, so the next replay keeps its nu
         ->and($outbox->abandoned()[0]['reason'])->toBe('receipt_pruned');
 })->with(outboxStores());
 
+/**
+ * A device restored from an old backup, or a new install reusing its id, is
+ * BEHIND the server: every write it still has queued may be one it sent
+ * before. They are settled together, and new writes go out after where the
+ * server is - burning one position per write left it unable to write anything
+ * new until it had crawled through the whole pruned range.
+ */
+it('settles a restored device\'s whole queue at once and goes on after the server', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    foreach (['a', 'b', 'c'] as $id) {
+        $outbox->queue(note($id), MutationKind::Update, [Op::set('t', $id)], 1);
+    }
+
+    $first = $outbox->head() ?? throw new LogicException('expected a head');
+    $outbox->settledUnknown($first, serverAcknowledged: 500);
+    $outbox->queue(note('d'), MutationKind::Update, [Op::set('t', 'd')], 1);
+    $next = $outbox->head() ?? throw new LogicException('expected the new write');
+
+    expect($outbox->abandoned())->toHaveCount(3)
+        ->and(array_unique(array_column($outbox->abandoned(), 'reason')))->toBe(['receipt_pruned'])
+        ->and($next->operations[0]->value->value())->toBe('d')
+        ->and($next->sequence->value)->toBe(501);
+})->with(outboxStores());
+
 /** A write handed out keeps its number, and a stream sends a waiting write before numbering another. */
 it('keeps a sent write\'s number and sends it before anything else on its stream', function (OutboxStore $store) {
     $outbox = outboxFor($store);

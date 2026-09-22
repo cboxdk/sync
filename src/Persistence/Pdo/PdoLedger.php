@@ -40,9 +40,21 @@ class PdoLedger implements Ledger
         return $this->space;
     }
 
-    public function receipt(string $mutationId): ?Receipt
+    public function receipt(string $mutationId, bool $latest = false): ?Receipt
     {
-        $payload = $this->scalar('SELECT payload FROM sync_receipts WHERE mutation_id = ?', [$mutationId]);
+        $sql = 'SELECT payload FROM sync_receipts WHERE mutation_id = ?';
+        if ($latest && $this->lockingReads && $this->schema->driver === PdoSchema::MYSQL) {
+            // A locking read sees the latest committed row, whatever snapshot
+            // the host's transaction took before the space lock. Only here,
+            // where the row is expected to exist: a locking read that finds
+            // nothing locks the gap, and receipts are shared by every space.
+            $statement = $this->connection->prepare($sql.' FOR SHARE');
+            $statement->execute([$mutationId]);
+            $value = $statement->fetchColumn();
+            $payload = is_string($value) ? $value : null;
+        } else {
+            $payload = $this->scalar($sql, [$mutationId]);
+        }
 
         return $payload === null ? null : Payload::decode($payload, Receipt::class);
     }
@@ -142,6 +154,11 @@ class PdoLedger implements Ledger
 
             throw new TransientFailure('Mutation identity already recorded', previous: $exception);
         }
+    }
+
+    public function amendReceipt(Receipt $receipt): void
+    {
+        $this->run('UPDATE sync_receipts SET payload = ? WHERE mutation_id = ? AND space = ?', [Payload::encode($receipt), $receipt->mutation->id, $this->space]);
     }
 
     public function acknowledge(Replica $replica, int $sequence): void

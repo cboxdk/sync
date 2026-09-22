@@ -197,9 +197,21 @@ class PdoOutboxStore implements OutboxStore
 
     public function find(string $mutationId): ?Mutation
     {
-        $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NULL', [$mutationId]);
+        $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NULL'.$this->locking(), [$mutationId]);
 
         return $payload === null ? null : Payload::decode($payload, Mutation::class);
+    }
+
+    /**
+     * Inside a transaction, a read of a row this transaction may write back
+     * locks it, so two processes rewriting the same write - one handing it
+     * out, one pointing its reference at a parent's new name - take turns,
+     * and the second sees what the first wrote instead of overwriting it with
+     * the copy it read before. SQLite already serializes every transaction.
+     */
+    private function locking(): string
+    {
+        return $this->pdo->inTransaction() && $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) !== 'sqlite' ? ' FOR UPDATE' : '';
     }
 
     public function markSent(Mutation $numbered): void
@@ -332,7 +344,7 @@ class PdoOutboxStore implements OutboxStore
         }
         $mutations = [];
         $sql = 'SELECT mutation_id, payload FROM sync_outbox WHERE abandoned_reason IS NULL AND attempted = 0 AND entity_type IN ('
-            .implode(', ', array_fill(0, count($entityTypes), '?')).') ORDER BY queued_at, mutation_id';
+            .implode(', ', array_fill(0, count($entityTypes), '?')).') ORDER BY queued_at, mutation_id'.$this->locking();
         foreach ($this->rows($sql, $entityTypes) as $row) {
             $mutations[] = Payload::decode($row[1], Mutation::class);
         }

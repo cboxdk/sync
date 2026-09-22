@@ -14,6 +14,12 @@
 
 ### Fixed
 
+- **A duplicate delivery inside a host's transaction is answered from its receipt.** On MySQL at REPEATABLE READ the host's snapshot predates the space lock, so a retry whose first copy had just committed was answered `sequence_behind`; the device renumbered a write that had landed and then abandoned it. A position already used is now looked up again with a read that sees the latest commit, and so is a dependency.
+- **An echo is the writer's own knowledge.** `recordTrusted(..., echoOf:)` records what the host's table made of a device's write and folds its versions into that write's answer, so the device's next edit does not conflict with its own write. `asCreate:` writes every field when the log has never held the record - a row that existed before it was synced. An `If-Match` on a record the log does not hold fails the precondition instead of creating it.
+- **A restored device is not stuck behind the pruned range.** `settledUnknown()` takes the server's acknowledged sequence; when the server is further along than the device, every write still queued on that stream is settled together and new writes go on after the server. It used to burn one position per write, so the device could write nothing new until it had crawled through the whole range.
+- A failed rollback no longer hides the failure that caused it (a deadlock ends the transaction on MySQL, and the rollback after it failed too); SQLite's busy and PostgreSQL's lock timeout count as contention; a space name is checked before its row is created, and a missing space row fails instead of locking nothing.
+- Handing out a write and rewriting it for a parent's new name lock the row on MySQL and PostgreSQL device stores, so neither overwrites the other with the copy it read before.
+- `Ledger` gains `amendReceipt()`, and `receipt()` takes `$latest`.
 - The first writes to a new space no longer race: the space row is created with a statement that cannot fail on a duplicate, which on PostgreSQL used to abort the host's surrounding transaction.
 
 - **A device's numbering could disagree with the server's.** Each entity type and space a device writes to is now its own replica stream. The server numbers per replica per space and maps types and scopes to spaces by rules the device cannot see; one stream per (type, space) keeps both sides counting the same thing, where a single lost response used to make a write collide and be abandoned for good.

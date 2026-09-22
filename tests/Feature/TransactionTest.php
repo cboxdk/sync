@@ -8,6 +8,7 @@ use Cbox\Sync\Data\EntityRecord;
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Engine;
 use Cbox\Sync\Enums\MutationKind;
+use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\Persistence\InMemoryStore;
@@ -108,4 +109,40 @@ it('answers a deadlock as a transient failure', function (string $state, int $dr
     'mysql deadlock' => ['40001', 1213],
     'mysql lock wait' => ['HY000', 1205],
     'postgres deadlock' => ['40P01', 7],
+    'postgres lock timeout' => ['55P03', 7],
+    'sqlite busy' => ['HY000', 5],
+]);
+
+/**
+ * A deadlock ends the whole transaction on MySQL, so rolling back after it can
+ * fail too - and that second failure used to replace the deadlock, reaching the
+ * caller as a raw error instead of one worth retrying.
+ */
+it('keeps the failure that matters when the rollback fails too', function () {
+    $store = new class(new PDO('sqlite::memory:')) extends PdoStore
+    {
+        protected function rollback(): void
+        {
+            throw new PDOException('SAVEPOINT does not exist');
+        }
+    };
+    $store->migrate();
+    $deadlock = new PDOException('deadlock');
+    $deadlock->errorInfo = ['40001', 1213, 'deadlock'];
+    (new ReflectionProperty(Exception::class, 'code'))->setValue($deadlock, '40001');
+
+    expect(fn () => $store->transaction('s', function () use ($deadlock): never {
+        throw $deadlock;
+    }))->toThrow(TransientFailure::class);
+});
+
+/** MySQL's INSERT IGNORE stored an over-long space truncated - as another space. */
+it('refuses a space name that is not a valid identifier before storing anything', function (string $space) {
+    $store = new PdoStore(new PDO('sqlite::memory:'));
+    $store->migrate();
+
+    expect(fn () => $store->transaction($space, fn () => null))->toThrow(InvalidRequest::class);
+})->with([
+    'too long' => [str_repeat('s', 151)],
+    'not utf-8' => ["bad\xff"],
 ]);

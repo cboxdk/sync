@@ -34,7 +34,7 @@ class InMemoryLedger implements Ledger
         return $this->space;
     }
 
-    public function receipt(string $mutationId): ?Receipt
+    public function receipt(string $mutationId, bool $latest = false): ?Receipt
     {
         return $this->state->receipts[$mutationId] ?? null;
     }
@@ -95,6 +95,13 @@ class InMemoryLedger implements Ledger
             throw new TransientFailure('Mutation identity already recorded');
         }
         $this->state->receipts[$receipt->mutation->id] = $receipt;
+    }
+
+    public function amendReceipt(Receipt $receipt): void
+    {
+        if (isset($this->state->receipts[$receipt->mutation->id])) {
+            $this->state->receipts[$receipt->mutation->id] = $receipt;
+        }
     }
 
     public function acknowledge(Replica $replica, int $sequence): void

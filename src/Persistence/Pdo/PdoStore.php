@@ -17,6 +17,7 @@ use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\ValueObjects\CommitSequence;
 use Cbox\Sync\ValueObjects\EntityKey;
+use Cbox\Sync\ValueObjects\Identifier;
 use Cbox\Sync\ValueObjects\Replica;
 
 /**
@@ -68,17 +69,35 @@ class PdoStore implements Store
         if ($this->active) {
             throw new TransientFailure('Nested or concurrent transaction is unsupported');
         }
+        // Before the space row is created: MySQL's INSERT IGNORE would store
+        // an over-long or malformed name truncated, as a different space.
+        Identifier::check($space, 'space');
         $this->ensureSpace($space);
         $this->active = true;
         try {
-            $this->begin();
+            try {
+                $this->begin();
+            } catch (\PDOException $failure) {
+                // SQLite's BEGIN IMMEDIATE waits for the write lock here.
+                if (self::isContention($failure)) {
+                    throw new TransientFailure('The space is busy; retry the same mutation', previous: $failure);
+                }
+
+                throw $failure;
+            }
             try {
                 $result = $this->underLock($space, $callback);
                 $this->commit();
 
                 return $result;
             } catch (\Throwable $failure) {
-                $this->rollback();
+                try {
+                    $this->rollback();
+                } catch (\PDOException) {
+                    // The database may have ended the transaction itself - a
+                    // deadlock does on MySQL - and the failure that matters is
+                    // the one that got us here.
+                }
 
                 // Two writers that each hold what the other needs: nothing was
                 // committed, and the same mutation may simply be sent again.
@@ -127,7 +146,13 @@ class PdoStore implements Store
         $state = (string) $failure->getCode();
         $driverCode = $failure->errorInfo[1] ?? null;
 
-        return in_array($state, ['40001', '40P01'], true) || in_array($driverCode, [1213, 1205], true);
+        if ($state === 'HY000' && in_array($driverCode, [5, 6], true)) {
+            // SQLITE_BUSY and SQLITE_LOCKED: another connection holds the
+            // database's write lock past the busy timeout.
+            return true;
+        }
+
+        return in_array($state, ['40001', '40P01', '55P03'], true) || in_array($driverCode, [1213, 1205], true);
     }
 
     protected function commit(): void
@@ -190,7 +215,10 @@ class PdoStore implements Store
         if ($this->schema->locksRows()) {
             $sql .= ' FOR UPDATE';
         }
-        $this->scalar($sql, [$space]);
+        if ($this->scalar($sql, [$space]) === null) {
+            // Locking nothing would let every writer through at once.
+            throw new \LogicException(sprintf('The space row for "%s" is missing; it cannot be locked.', $space));
+        }
     }
 
     public function record(EntityKey $entity): ?EntityRecord

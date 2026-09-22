@@ -75,9 +75,11 @@ A transport sends `head()` and reports back exactly one of these outcomes:
 | server is busy | nothing; send the same mutation again | the engine returns the stored result for a repeated id, so only an unchanged id is safe |
 | server has not seen everything before this | `resumeAfter($acknowledgedSequence)` | drops only what it already has; the rest go again in order |
 | terminal for this identity | `abandon($mutation, $reason)` | it can never be sent again, so it leaves the queue instead of blocking everything behind it |
-| `receipt_pruned` | `settledUnknown($mutation)` | it may have been applied and nobody can say; it takes its own position so the replays behind it keep theirs |
+| `receipt_pruned` | `settledUnknown($mutation, $acknowledgedSequence)` | it may have been applied and nobody can say; it takes its own position so the replays behind it keep theirs. When the server is further along the stream than the device - restored from an old backup, or an id reused by a new install - every write still queued on the stream is settled the same way at once, and new writes go on after the server |
 
 Getting any of those wrong is silent data loss or a permanently wedged
 queue, which is why they are implemented once here rather than in each
 application. Abandoned mutations are kept with their reason and must be
 surfaced: nothing else will tell the user that a write is never going to land.
+Do not offer to requeue a `receipt_pruned` write without asking: it may already
+be on the server, and sending it again under a new identity applies it twice.

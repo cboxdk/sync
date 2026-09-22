@@ -29,7 +29,20 @@ interface Ledger
 {
     public function space(): string;
 
-    public function receipt(string $mutationId): ?Receipt;
+    /**
+     * $latest asks for the latest committed receipt even where the reads of
+     * this transaction see an older snapshot - for a lookup whose answer is
+     * expected to exist, where a stale miss would be misread. Implementations
+     * without snapshots ignore it.
+     */
+    public function receipt(string $mutationId, bool $latest = false): ?Receipt;
+
+    /**
+     * Replace the stored answer of a mutation this space already processed -
+     * for a write the host made as a direct consequence of it, whose versions
+     * the writer has to count as its own.
+     */
+    public function amendReceipt(Receipt $receipt): void;
 
     public function acknowledged(Replica $replica): int;
 
