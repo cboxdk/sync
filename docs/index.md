@@ -19,6 +19,6 @@ Start with the [quickstart](quickstart.md) and [requirements](requirements.md).
 - [Extension points](extension-points/_index.md): resolvers, IDs and [storage](extension-points/persistence.md).
 - [Security and scope](security/_index.md): trust boundary and limitations.
 
-Storage is durable on SQLite, MySQL 8+ and PostgreSQL. HTTP, a wire format,
+Storage is durable on SQLite, MySQL 8.0.17+ and PostgreSQL. HTTP, a wire format,
 authentication, Laravel and NativePHP are not included — the Laravel integration
 lives in `cboxdk/laravel-sync`.

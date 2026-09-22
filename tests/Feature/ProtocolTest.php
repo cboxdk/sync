@@ -13,6 +13,7 @@ use Cbox\Sync\Support\UuidV7Generator;
 use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\FieldValue;
 use Cbox\Sync\ValueObjects\MutationSequence;
+use Cbox\Sync\ValueObjects\Replica;
 
 it('rejects spoofed dependencies across replicas entities and spaces', function () {
     $this->seedRecord();
@@ -162,4 +163,16 @@ it('classifies malformed candidate IDs as invalid requests before deduplication'
     expect(fn () => new Resolution('group', 1, [new stdClass, new stdClass]))->toThrow(InvalidRequest::class);
     expect(fn () => new Resolution('group', 1, ['a', 'a']))->toThrow(InvalidRequest::class);
     expect(fn () => new Resolution('group', 1, [2 => 'a']))->toThrow(InvalidRequest::class);
+});
+
+/** One oversized id used to make every later bootstrap of its view impossible. */
+it('refuses an identifier longer than the columns that store it', function () {
+    $long = str_repeat('x', 151);
+
+    expect(fn () => new EntityKey('s', 't', $long))->toThrow(InvalidRequest::class, 'longer than 150')
+        ->and(fn () => new EntityKey($long, 't', 'i'))->toThrow(InvalidRequest::class)
+        ->and(fn () => new Replica($long))->toThrow(InvalidRequest::class)
+        ->and(fn () => new EntityKey('s', 't', "a\0b"))->toThrow(InvalidRequest::class, 'NUL')
+        // Characters, not bytes: the columns are counted the same way.
+        ->and((new EntityKey('s', 't', str_repeat('æ', 150)))->id)->toBe(str_repeat('æ', 150));
 });

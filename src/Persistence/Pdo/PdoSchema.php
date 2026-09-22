@@ -96,6 +96,7 @@ class PdoSchema
         // means a host upgrading the package needs no migration of its own,
         // including one using the bare PDO adapter with no framework at all.
         $this->addMissingColumns($connection);
+        $this->repairCollations($connection);
 
         foreach ($this->indexStatements() as $statement) {
             $connection->exec($statement);
@@ -123,6 +124,35 @@ class PdoSchema
                     ));
                 }
                 $connection->exec(sprintf('ALTER TABLE %s ADD COLUMN %s', $table['name'], $definition));
+            }
+        }
+    }
+
+    /**
+     * Retype identity columns an earlier release created as utf8mb4_bin.
+     *
+     * The one place reconciliation changes an existing column, because the
+     * old collation is a correctness bug rather than a preference: it treats
+     * identifiers that differ by trailing spaces as equal. Only columns still
+     * carrying exactly that collation are touched, so this runs once.
+     */
+    private function repairCollations(\PDO $connection): void
+    {
+        if ($this->driver !== self::MYSQL) {
+            return;
+        }
+
+        foreach ($this->tables() as $table) {
+            $lookup = $connection->prepare(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLLATION_NAME = 'utf8mb4_bin'"
+            );
+            $lookup->execute([$table['name']]);
+            $stale = array_map('strtolower', array_filter($lookup->fetchAll(\PDO::FETCH_COLUMN), is_string(...)));
+            foreach ($table['columns'] as $definition) {
+                $column = (string) strtok($definition, ' ');
+                if (in_array(strtolower($column), $stale, true)) {
+                    $connection->exec(sprintf('ALTER TABLE %s MODIFY %s', $table['name'], $definition));
+                }
             }
         }
     }
@@ -202,10 +232,13 @@ class PdoSchema
         // Identity columns order bootstrap pages, so they must sort by bytes.
         // MySQL's default collation is case- and accent-insensitive and would
         // page the same data in a different order from every other driver.
+        // And not utf8mb4_bin: that one is PAD SPACE, so "a" and "a " are the
+        // same key - measured on MySQL 8.4, a mutation id differing only by a
+        // trailing space was answered with another mutation's receipt.
         // The length is bounded so the widest composite index stays well inside
         // InnoDB's 3072-byte key limit at four bytes per character.
         $name = match ($this->driver) {
-            self::MYSQL => 'VARCHAR(150) COLLATE utf8mb4_bin',
+            self::MYSQL => 'VARCHAR(150) COLLATE utf8mb4_0900_bin',
             self::PGSQL => 'TEXT COLLATE "C"',
             default => 'TEXT',
         };

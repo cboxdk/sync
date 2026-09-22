@@ -35,11 +35,11 @@ class PdoClientSchema
     {
         $text = $this->driver === 'mysql' ? 'LONGTEXT' : 'TEXT';
         $name = match ($this->driver) {
-            'mysql' => 'VARCHAR(150) COLLATE utf8mb4_bin',
+            'mysql' => 'VARCHAR(150) COLLATE utf8mb4_0900_bin',
             'pgsql' => 'TEXT COLLATE "C"',
             default => 'TEXT',
         };
-        $key = $this->driver === 'mysql' ? 'VARCHAR(64) COLLATE utf8mb4_bin' : 'TEXT';
+        $key = $this->driver === 'mysql' ? 'VARCHAR(64) COLLATE utf8mb4_0900_bin' : 'TEXT';
 
         $statements = [
             "CREATE TABLE IF NOT EXISTS sync_client_entities (

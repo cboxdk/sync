@@ -26,16 +26,26 @@ use Cbox\Sync\ValueObjects\Replica;
  */
 function parityStores(): array
 {
-    $durable = new PdoStore(new PDO('sqlite::memory:'));
-    $durable->migrate();
+    $stores = [
+        'memory' => fn (): Store => new InMemoryStore,
+        'sqlite' => function (): Store {
+            $durable = new PdoStore(new PDO('sqlite::memory:'));
+            $durable->migrate();
 
-    return ['memory' => new InMemoryStore, 'sqlite' => $durable];
+            return $durable;
+        },
+    ];
+    if ((string) (getenv('SYNC_DSN') ?: '') !== '') {
+        $stores['database'] = fn (): Store => test()->databaseStore() ?? throw new LogicException('SYNC_DSN is set but no store was built');
+    }
+
+    return $stores;
 }
 
 function seed(Store $store, string $id, array $operations): void
 {
     (new Engine($store))->process(new Mutation(
-        'seed-'.$id, new EntityKey('space', 'notes', $id), new Replica('r-'.$id),
+        'seed-'.md5($id), new EntityKey('space', 'notes', $id), new Replica('r-'.md5($id)),
         new MutationSequence(1), MutationKind::Create, new RecordVersion(0), $operations,
     ));
 }
@@ -182,4 +192,30 @@ it('applies every predicate when more than one is given', function (Store $store
     $found = array_map(fn ($record): string => $record->entity->id, $store->scanRecords('space', null, 10, $criteria));
 
     expect($found)->toBe(['both']);
+})->with(parityStores());
+
+/**
+ * The identifiers a real client sends that a naive store gets wrong: full
+ * length, multi-byte, case that a case-insensitive collation folds, and
+ * characters that sort differently by code point than by locale.
+ */
+it('orders and pages hostile identifiers identically', function (Store $store) {
+    $ids = [str_repeat('z', 150), 'Å', 'å', 'a', 'A', 'b', 'æble', 'émoji-🌍', 'e', 'Z', str_repeat('ø', 150)];
+    foreach ($ids as $id) {
+        seed($store, $id, [Op::set('status', 'open')]);
+    }
+
+    $seen = [];
+    $after = null;
+    while (($page = $store->scanRecords('space', $after, 2)) !== []) {
+        foreach ($page as $record) {
+            $seen[] = $record->entity->id;
+            $after = $record->entity;
+        }
+    }
+
+    $expected = $ids;
+    usort($expected, strcmp(...));
+
+    expect($seen)->toBe($expected);
 })->with(parityStores());

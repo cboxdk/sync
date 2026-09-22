@@ -13,6 +13,9 @@ readonly class EntityKey
         if ($space === '' || $type === '' || $id === '') {
             throw new InvalidRequest('Entity identity must not be empty');
         }
+        Identifier::check($space, 'Space');
+        Identifier::check($type, 'Entity type');
+        Identifier::check($id, 'Entity id');
     }
 
     public function key(): string

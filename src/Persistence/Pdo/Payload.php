@@ -52,8 +52,25 @@ class Payload
      * after the rows were written. Rows written before the tag existed have no
      * prefix and are read as version 0; base64 cannot contain a colon, so an
      * untagged payload can never be mistaken for a tagged one.
+     *
+     * Version 2 deflates before encoding. A commit carries the record before
+     * and after the write plus the receipt, and PHP's serialization repeats
+     * every class and property name in full, so a one-field edit on a
+     * ten-field record stored ~22KB - about 20GiB per million writes per
+     * tenant. Deflated it is ~2.6KB. Level 3, not the default 6: within 15%
+     * of the size at a quarter of the CPU, and this runs on every write.
      */
-    private const VERSION = 1;
+    private const VERSION = 2;
+
+    /**
+     * The most a stored payload may inflate to.
+     *
+     * A row is not fully trusted (see ALLOWED), and a small deflated row can
+     * expand to gigabytes. No payload the engine writes comes near this - the
+     * transport caps a request body at 256KB - and it stays well inside a
+     * default memory_limit.
+     */
+    private const MAX_INFLATED = 16 * 1024 * 1024;
 
     /**
      * Every class the adapter can legitimately find inside a stored payload.
@@ -108,7 +125,12 @@ class Payload
         // NUL bytes, which a PostgreSQL text column cannot hold at all. Keeping
         // the payload to a safe alphabet makes it identical on every driver
         // instead of working by accident on the permissive ones.
-        return self::VERSION.':'.base64_encode(serialize($value));
+        $deflated = gzdeflate(serialize($value), 3);
+        if ($deflated === false) {
+            throw new ProtocolException('Could not compress a payload for storage');
+        }
+
+        return self::VERSION.':'.base64_encode($deflated);
     }
 
     /**
@@ -130,6 +152,9 @@ class Payload
         if ($decoded === false) {
             throw new ProtocolException('Stored payload is not valid base64');
         }
+        if ($version >= 2) {
+            $decoded = self::inflate($decoded);
+        }
 
         $value = unserialize($decoded, ['allowed_classes' => self::ALLOWED]);
 
@@ -145,6 +170,56 @@ class Payload
         }
 
         return $value;
+    }
+
+    /**
+     * Inflate, stopping at the bound rather than after it.
+     *
+     * gzinflate()'s own length argument does not stop it: measured on PHP 8.4,
+     * 17KB of deflate came back as 17MB with a 16MB limit. So the input is fed
+     * a kilobyte at a time - deflate expands by at most about a thousand to
+     * one, so no step can overshoot by more than a megabyte - and the total is
+     * checked after each.
+     */
+    private static function inflate(string $deflated): string
+    {
+        $stream = inflate_init(ZLIB_ENCODING_RAW);
+        if ($stream === false) {
+            throw new ProtocolException('Could not start inflating a stored payload');
+        }
+
+        $inflated = '';
+        $length = strlen($deflated);
+        for ($offset = 0; $offset < $length; $offset += 1024) {
+            $last = $offset + 1024 >= $length;
+            $piece = self::quietly(fn (): string|false => inflate_add($stream, substr($deflated, $offset, 1024), $last ? ZLIB_FINISH : ZLIB_SYNC_FLUSH));
+            if ($piece === false) {
+                throw new ProtocolException('Stored payload is not valid deflate data');
+            }
+            $inflated .= $piece;
+            if (strlen($inflated) > self::MAX_INFLATED) {
+                throw new ProtocolException('Stored payload inflates past '.self::MAX_INFLATED.' bytes');
+            }
+        }
+
+        return $inflated;
+    }
+
+    /**
+     * zlib reports corrupt input as a warning AND a false return. The return
+     * is what this class acts on; the warning would only reach a host's error
+     * handler as noise about a row that is already being refused by name.
+     *
+     * @param  \Closure(): (string|false)  $call
+     */
+    private static function quietly(\Closure $call): string|false
+    {
+        set_error_handler(static fn (): bool => true);
+        try {
+            return $call();
+        } finally {
+            restore_error_handler();
+        }
     }
 
     /** Exact equality for FieldValue, independent of any database's JSON or collation behaviour. */

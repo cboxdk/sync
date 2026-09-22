@@ -13,6 +13,7 @@ readonly class Replica
         if ($id === '') {
             throw new InvalidRequest('Replica identity must not be empty');
         }
+        Identifier::check($id, 'Replica identity');
     }
 
     public function stream(string $space): string

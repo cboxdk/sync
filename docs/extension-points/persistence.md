@@ -8,7 +8,7 @@ description: "Store the log durably, with gapless sequences and a proven concurr
 
 Two adapters ship. `Persistence\InMemoryStore` is the reference: fast, whole-state
 inspectable, and gone at process exit. `Persistence\Pdo\PdoStore` is durable, and
-runs on SQLite, MySQL 8+ and PostgreSQL.
+runs on SQLite, MySQL 8.0.17+ and PostgreSQL.
 
 ```php
 $connection = new PDO('pgsql:host=127.0.0.1;dbname=app', 'app', $password);
@@ -55,7 +55,7 @@ tombstone flag, conflict group state, mutation identity, acknowledged sequence
 and commit sequence. The immutable domain objects themselves are stored as opaque
 payloads, so the schema never has to mirror every DTO.
 
-Those payloads use PHP's own serialization, base64-encoded. That is a storage
+Those payloads use PHP's own serialization, deflated and base64-encoded. That is a storage
 detail of this adapter, not a wire format — nothing outside the database reads
 them, and this package ships no transport. A cross-language representation is a
 transport concern, and `Mutation::fingerprint()` has the same limitation today.
@@ -65,7 +65,18 @@ with NUL bytes, which a PostgreSQL text column cannot hold at all. Keeping
 payloads to a safe alphabet makes them identical on every driver rather than
 working by accident on the permissive ones.
 
-Every payload carries a format version, written as a `1:` prefix. Base64 cannot
+Deflating is what keeps the log affordable. A commit carries the record before
+and after the write plus the receipt, and PHP's serialization repeats every class
+and property name in full: a one-field edit on a ten-field record stored about
+22KB, which is 20GiB per million writes per tenant. Deflated at level 3 it is
+about 2.6KB, for roughly 20µs more per write. Level 3 rather than the default 6
+because it gets within 15% of the size for a quarter of the CPU, and this runs on
+every write. Reading inflates in bounded steps and refuses anything that would
+expand past 16MB, because a stored row is not fully trusted and a few kilobytes
+of deflate can expand to gigabytes.
+
+Every payload carries a format version, written as a prefix: `2:` for deflated,
+`1:` for the earlier uncompressed form, which is still read. Base64 cannot
 contain a colon, so rows written before the tag existed are unambiguous and are
 still read. The tag is what makes a future change of encoding say what happened,
 instead of surfacing years later as an unserialize failure that reads like a
@@ -87,6 +98,14 @@ not the value, which keeps equality exact without depending on any database's JS
 handling. Identity columns use a binary collation on every driver for the same
 reason: MySQL's default collation is case- and accent-insensitive and would
 otherwise page a bootstrap in a different order from SQLite and PostgreSQL.
+On MySQL that collation is `utf8mb4_0900_bin`, not `utf8mb4_bin`: the latter
+pads with spaces, so `a` and `a ` are the same key, and a mutation id differing
+only by a trailing space was answered with another mutation's receipt. An
+installation created by an earlier release is retyped by `migrate()` - the one
+change reconciliation makes to an existing column, because it is a correctness
+fix rather than a preference. Every identifier is also capped at 150 characters
+and may not contain a NUL byte, so no value can be stored on one driver and
+refused by another.
 
 Its index carries the keyset columns as well as the predicate, so one index both
 finds the matching records and hands them over in order, and a selective page

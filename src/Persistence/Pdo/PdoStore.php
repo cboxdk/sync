@@ -343,15 +343,24 @@ class PdoStore implements Store
     /** @return list<Commit> */
     private function commitRows(string $space, int $after, int $limit, ?string $entityType = null): array
     {
-        $sql = 'SELECT payload FROM sync_commits WHERE space = ? AND sequence > ?';
-        $bindings = [$space, $after];
-        if ($entityType !== null) {
+        if ($entityType === null) {
+            $rows = $this->select('SELECT payload FROM sync_commits WHERE space = ? AND sequence > ? ORDER BY sequence LIMIT '.$limit, [$space, $after]);
+        } else {
             // A row written before entity_type existed has no type to compare,
             // and skipping it would silently drop history the reader is owed.
-            $sql .= ' AND (entity_type = ? OR entity_type IS NULL)';
-            $bindings[] = $entityType;
+            //
+            // Two ranges merged, not `entity_type = ? OR entity_type IS NULL`:
+            // the OR stops SQLite using the (space, entity_type, sequence)
+            // index at all, and the read falls back to walking the space's
+            // whole log tail - the cost this column exists to avoid. Each
+            // branch is limited on its own, so neither can return more than
+            // the page.
+            $branch = 'SELECT payload, sequence FROM (SELECT payload, sequence FROM sync_commits WHERE space = ? AND entity_type %s AND sequence > ? ORDER BY sequence LIMIT '.$limit.') %s';
+            $rows = $this->select(
+                'SELECT payload FROM ('.sprintf($branch, '= ?', 'typed').' UNION ALL '.sprintf($branch, 'IS NULL', 'untyped').') merged ORDER BY sequence LIMIT '.$limit,
+                [$space, $entityType, $after, $space, $after],
+            );
         }
-        $rows = $this->select($sql.' ORDER BY sequence LIMIT '.$limit, $bindings);
         $commits = [];
         foreach ($rows as $row) {
             $commits[] = Payload::decode($row, Commit::class);
