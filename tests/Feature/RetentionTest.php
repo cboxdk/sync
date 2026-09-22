@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 use Cbox\Sync\Data\FieldOperation as Op;
+use Cbox\Sync\Enums\MutationStatus;
 use Cbox\Sync\Exceptions\HistoryUnavailable;
-use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Persistence\InMemoryStore;
 use Cbox\Sync\Tests\Fixtures\ViewScenario;
 use Cbox\Sync\ValueObjects\CommitSequence;
@@ -92,14 +92,34 @@ it('prunes the receipts written in the commits it drops, and keeps the rest', fu
         ->and($this->store->receipt('a-4'))->not->toBeNull();
 });
 
-/** Past the horizon a replay cannot be answered, and says so rather than applying twice. */
-it('refuses a replay whose receipt was pruned instead of applying it again', function () {
+/**
+ * Past the horizon a replay has no receipt to be answered from. It is told
+ * where the stream is and applies nothing; a writer that renumbers and sends
+ * it again is judged on its old base, so it meets the newer value as a
+ * conflict rather than overwriting it.
+ */
+it('does not apply a replay whose receipt was pruned', function () {
     $this->seedRecord();
     $this->write('a', 1, [Op::set('title', 'once')]);
     $this->write('a', 2, [Op::set('title', 'twice')], base: 2);
     $this->store->prune('test', new CommitSequence(3));
 
-    expect(fn () => $this->write('a', 1, [Op::set('title', 'once')]))
-        ->toThrow(ProtocolException::class);
-    expect($this->record()->value('title')->value())->toBe('twice');
+    $replay = $this->write('a', 1, [Op::set('title', 'once')]);
+    expect($replay->status)->toBe(MutationStatus::MutationGap)
+        ->and($this->record()->value('title')->value())->toBe('twice');
+
+    $renumbered = $this->write('a', 3, [Op::set('title', 'once')]);
+    expect($renumbered->status)->toBe(MutationStatus::Conflict)
+        ->and($this->record()->value('title')->value())->toBe('twice');
+});
+
+/** A dependency pruned with the log is no knowledge, not a refusal. */
+it('treats a pruned dependency as no knowledge rather than refusing the write', function () {
+    $this->seedRecord();
+    $this->write('a', 1, [Op::set('body', 'mine')]);
+    $this->store->prune('test', new CommitSequence(3));
+
+    $dependent = $this->write('a', 2, [Op::set('title', 'next')], base: 2, dependsOn: 'a-1');
+
+    expect($dependent->status)->toBe(MutationStatus::Applied);
 });

@@ -122,3 +122,11 @@ it('refuses a payload that is not valid deflate data', function () {
     expect(fn () => Payload::decode('2:'.base64_encode('not deflate at all'), EntityKey::class))
         ->toThrow(ProtocolException::class, 'not valid deflate');
 });
+
+/** A stream cut short inflates to a prefix without complaint; only its end marker says it is whole. */
+it('refuses a payload whose deflate stream was cut short', function () {
+    $whole = (string) gzdeflate(serialize(new EntityKey('team-1', 'notes', str_repeat('x', 100))), 3);
+
+    expect(fn () => Payload::decode('2:'.base64_encode(substr($whole, 0, -4)), EntityKey::class))
+        ->toThrow(ProtocolException::class);
+});

@@ -103,7 +103,11 @@ pads with spaces, so `a` and `a ` are the same key, and a mutation id differing
 only by a trailing space was answered with another mutation's receipt. An
 installation created by an earlier release is retyped by `migrate()` - the one
 change reconciliation makes to an existing column, because it is a correctness
-fix rather than a preference. Every identifier is also capped at 150 characters
+fix rather than a preference. **Run that first `migrate()` in a maintenance
+window on a large MySQL installation:** changing the collation of a key column
+cannot happen in place, so each table is copied with writes blocked - once per
+table, all its columns together. Measured at about 1.7s per 130,000 rows. After
+that it is a no-op. Every identifier is also capped at 150 characters
 and may not contain a NUL byte, so no value can be stored on one driver and
 refused by another.
 

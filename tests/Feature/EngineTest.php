@@ -81,8 +81,14 @@ it('detects gaps and identity reuse including a different payload at the same se
     expect($this->write('a', 2, [Op::set('title', 'gap')])->status)->toBe(MutationStatus::MutationGap);
     $this->write('a', 1, [Op::set('title', 'A')]);
     expect(fn () => $this->write('a', 1, [Op::set('title', 'B')]))->toThrow(ProtocolException::class);
-    $differentId = $this->mutation('a', 1, [Op::set('title', 'A')], id: 'different');
-    expect(fn () => $this->engine->process($differentId))->toThrow(ProtocolException::class);
+    // A new identity on a number the stream already used: the writer is
+    // behind (restored from a backup). Told where the stream is, not refused -
+    // refusing abandoned every write after the restore.
+    $differentId = $this->engine->process($this->mutation('a', 1, [Op::set('title', 'A')], id: 'different'));
+    expect($differentId->status)->toBe(MutationStatus::MutationGap)
+        ->and($differentId->reason)->toBe('sequence_behind')
+        ->and($differentId->acknowledgedSequence)->toBe(1)
+        ->and($this->store->receipt('different'))->toBeNull();
 });
 
 it('accepts dependent offline writes but still detects intervening remote changes', function () {

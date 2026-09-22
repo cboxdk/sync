@@ -10,6 +10,7 @@ use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Data\Resolution;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\ValueObjects\EntityKey;
+use Cbox\Sync\ValueObjects\Identifier;
 use Cbox\Sync\ValueObjects\MutationSequence;
 use Cbox\Sync\ValueObjects\RecordVersion;
 use Cbox\Sync\ValueObjects\Replica;
@@ -59,7 +60,11 @@ class Outbox
         $mutation = new Mutation(
             ($this->identity)(),
             $entity,
-            $this->replica,
+            // Stamped now and kept: the stream a write travels on is part of
+            // its identity on the server, so it must not change between a send
+            // and its retry - not even across an upgrade that changes how new
+            // writes are routed.
+            $this->stream($entity),
             // A placeholder. The real sequence is assigned when the
             // mutation is handed out, so one that is never accepted does
             // not consume a number the server will wait for forever.
@@ -92,7 +97,10 @@ class Outbox
             return null;
         }
 
-        $stream = $this->stream($mutation->entity);
+        // The stream it was queued on. A write queued before streams existed
+        // carries the bare device id and goes out on that stream, numbered as
+        // it always was - its retry and its depends_on still match.
+        $stream = $mutation->replica;
 
         return new Mutation(
             $mutation->id,
@@ -171,17 +179,17 @@ class Outbox
      * left updates addressed to a handle nothing could resolve any more.
      */
     /**
-     * @param  array<string, list<string>>  $references  entity type => fields that hold
-     *                                                   another record's id, rewritten too
+     * @param  array<string, array<string, string>>  $references  entity type => [field => the type
+     *                                                            it points at], rewritten too
      */
     public function acknowledged(Mutation $mutation, ?EntityKey $named = null, array $references = []): void
     {
         $this->store->transaction(function () use ($mutation, $named, $references): void {
-            $this->store->setAcknowledged($this->stream($mutation->entity), $mutation->entity->space, $mutation->sequence->value);
+            $this->store->setAcknowledged($mutation->replica, $mutation->entity->space, $mutation->sequence->value);
             $this->store->acknowledge($mutation->id);
             if ($named !== null && ! $named->equals($mutation->entity)) {
                 $this->store->rekey($mutation->entity, $named);
-                $this->rewriteReferences($mutation->entity->id, $named->id, $references);
+                $this->rewriteReferences($mutation->entity, $named->id, $references);
             }
         });
     }
@@ -196,24 +204,29 @@ class Outbox
      * is sent. Without it the child reaches the server pointing at an id that
      * never existed.
      *
-     * Only a value that is exactly the handle is touched.
+     * Only a value that is exactly the handle, in a field declared to point at
+     * the created record's type, in the same space, is touched - handles are
+     * the device's own and two types may well use the same one.
      *
-     * @param  array<string, list<string>>  $references
+     * @param  array<string, array<string, string>>  $references
      */
-    private function rewriteReferences(string $handle, string $name, array $references): void
+    private function rewriteReferences(EntityKey $handle, string $name, array $references): void
     {
         if ($references === []) {
             return;
         }
         foreach ($this->store->queued() as $queued) {
-            $fields = $references[$queued->entity->type] ?? [];
+            if ($queued->entity->space !== $handle->space) {
+                continue;
+            }
+            $fields = array_keys(array_filter($references[$queued->entity->type] ?? [], fn (string $target): bool => $target === $handle->type));
             if ($fields === []) {
                 continue;
             }
             $changed = false;
             $operations = [];
             foreach ($queued->operations as $operation) {
-                if (in_array($operation->field, $fields, true) && $operation->value->exists && $operation->value->value() === $handle) {
+                if (in_array($operation->field, $fields, true) && $operation->value->exists && $operation->value->value() === $handle->id) {
                     $operation = FieldOperation::set($operation->field, $name);
                     $changed = true;
                 }
@@ -250,7 +263,14 @@ class Outbox
         // device is AHEAD of the server - a server restored from a backup, a
         // device database restored from a newer one - so a counter that could
         // only rise would resend the same number and get the same gap forever.
-        $this->store->resetAcknowledged($this->stream($mutation->entity), $mutation->entity->space, $acknowledgedSequence);
+        // Compare-and-set: only if the counter is still where this attempt
+        // numbered from. Two deliveries can get the same gap; the one that
+        // resends and succeeds must not have the other wind it back after.
+        $this->store->transaction(function () use ($mutation, $acknowledgedSequence): void {
+            if ($this->store->acknowledged($mutation->replica, $mutation->entity->space) === $mutation->sequence->value - 1) {
+                $this->store->resetAcknowledged($mutation->replica, $mutation->entity->space, $acknowledgedSequence);
+            }
+        });
     }
 
     /**
@@ -269,7 +289,12 @@ class Outbox
      */
     public function stream(EntityKey $entity): Replica
     {
-        return new Replica($this->replica->id.'#'.substr(hash('sha256', $entity->type."\0".$entity->space), 0, 16));
+        // The device id is kept readable where it fits; one too long to leave
+        // room for the suffix is replaced by its hash, so every valid device
+        // id still yields a valid stream id.
+        $device = strlen($this->replica->id) <= Identifier::MAX_LENGTH - 17 ? $this->replica->id : hash('sha256', $this->replica->id);
+
+        return new Replica($device.'#'.substr(hash('sha256', $entity->type."\0".$entity->space), 0, 16));
     }
 
     /**

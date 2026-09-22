@@ -7,9 +7,11 @@ use Cbox\Sync\Client\InMemoryOutboxStore;
 use Cbox\Sync\Client\Outbox;
 use Cbox\Sync\Client\Pdo\PdoOutboxStore;
 use Cbox\Sync\Data\FieldOperation as Op;
+use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\ValueObjects\EntityKey;
+use Cbox\Sync\ValueObjects\MutationSequence;
 use Cbox\Sync\ValueObjects\RecordVersion;
 use Cbox\Sync\ValueObjects\Replica;
 
@@ -430,7 +432,10 @@ it('rewrites fields that reference a created record, when told which fields do',
     $outbox->queue(new EntityKey('team-1', 'tasks', 'task-handle'), MutationKind::Create, [Op::set('project_id', 'project-handle'), Op::set('title', 'project-handle')], 0);
     $create = $outbox->head() ?? throw new LogicException('expected a head');
 
-    $outbox->acknowledged($create, new EntityKey('team-1', 'projects', 'project-real'), ['tasks' => ['project_id']]);
+    // A tag with the same handle must not be mistaken for the project.
+    $outbox->queue(new EntityKey('team-1', 'tasks', 'other-task'), MutationKind::Create, [Op::set('tag_id', 'project-handle')], 0);
+
+    $outbox->acknowledged($create, new EntityKey('team-1', 'projects', 'project-real'), ['tasks' => ['project_id' => 'projects', 'tag_id' => 'tags']]);
 
     $task = $outbox->head('tasks') ?? throw new LogicException('expected the task');
     $values = [];
@@ -440,4 +445,57 @@ it('rewrites fields that reference a created record, when told which fields do',
     // The declared reference is rewritten; a field that merely happens to
     // hold the same text is not.
     expect($values)->toBe(['project_id' => 'project-real', 'title' => 'project-handle']);
+
+    $outbox->acknowledged($task);
+    $other = $outbox->head('tasks') ?? throw new LogicException('expected the other task');
+    expect($other->operations[0]->value->value())->toBe('project-handle');
 })->with(outboxStores());
+
+/**
+ * A write queued before streams existed carries the bare device id. It goes
+ * out on that stream, numbered where that stream left off, so its retry and
+ * its depends_on still match what the server recorded.
+ */
+it('sends a write queued before the upgrade on the stream it was queued on', function (OutboxStore $store) {
+    $legacy = new Replica('device-1');
+    $store->append(new Mutation('old', note('a'), $legacy, new MutationSequence(1), MutationKind::Update, new RecordVersion(1), [Op::set('t', 'x')]));
+    $store->setAcknowledged($legacy, 'team-1', 4);
+    $outbox = outboxFor($store);
+    $outbox->queue(note('b'), MutationKind::Update, [Op::set('t', 'y')], 1);
+
+    $head = $outbox->head() ?? throw new LogicException('expected a head');
+    expect($head->replica->id)->toBe('device-1')->and($head->sequence->value)->toBe(5);
+
+    $outbox->acknowledged($head);
+    $next = $outbox->head() ?? throw new LogicException('expected the new write');
+    expect($next->replica->id)->toBe($outbox->stream(note('b'))->id)->and($next->sequence->value)->toBe(1);
+})->with(outboxStores());
+
+/**
+ * Two deliveries get the same gap; one resends and succeeds. The other's
+ * late reset must not wind the counter back under it.
+ */
+it('ignores a resume that arrives after the stream has moved on', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $store->setAcknowledged($outbox->stream(note('a')), 'team-1', 3);
+    $stale = $outbox->head() ?? throw new LogicException('expected a head');
+    expect($stale->sequence->value)->toBe(4);
+
+    // The first delivery: told the server is at 0, resends as 1, succeeds.
+    $outbox->resumeAfter($stale, 0);
+    $outbox->acknowledged($outbox->head() ?? throw new LogicException('expected a head'));
+    $outbox->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
+
+    // The second, late with the same answer.
+    $outbox->resumeAfter($stale, 0);
+
+    expect($outbox->head()?->sequence->value)->toBe(2);
+})->with(outboxStores());
+
+it('makes a valid stream from a device id of any valid length', function () {
+    $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+
+    expect(strlen((string) $outbox->head()?->replica->id))->toBeLessThanOrEqual(150);
+});

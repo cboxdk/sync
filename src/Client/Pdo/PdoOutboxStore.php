@@ -54,6 +54,15 @@ class PdoOutboxStore implements OutboxStore
         $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_position ON sync_outbox (queued_at)');
         // A push drains one type in one space.
         $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_stream ON sync_outbox (entity_type, space, queued_at, mutation_id)');
+        // The entity id as a column, so a rename finds the rows it concerns
+        // by index instead of decoding every queued write of that type - which
+        // made draining a long run of offline creates quadratic. Added to an
+        // existing device database in place; rows from before it are NULL and
+        // are still matched by decoding.
+        if (! in_array('entity_id', $this->columns('sync_outbox'), true)) {
+            $this->pdo->exec("ALTER TABLE sync_outbox ADD COLUMN entity_id $name NULL");
+        }
+        $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_entity ON sync_outbox (space, entity_type, entity_id)');
         // What each handle this device created under became. Written in the
         // same transaction as the acknowledgement, so a crash cannot leave the
         // create gone and nothing that says what it was called.
@@ -77,8 +86,8 @@ class PdoOutboxStore implements OutboxStore
         $position = (int) ($this->scalar('SELECT COALESCE(MAX(queued_at), 0) FROM sync_outbox', []) ?? '0') + 1;
 
         try {
-            $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, queued_at, payload, abandoned_reason) VALUES (?, ?, ?, ?, ?, ?, NULL)', [
-                $mutation->id, $mutation->replica->id, $mutation->entity->space, $mutation->entity->type, $position, Payload::encode($mutation),
+            $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, entity_id, queued_at, payload, abandoned_reason) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)', [
+                $mutation->id, $mutation->replica->id, $mutation->entity->space, $mutation->entity->type, $mutation->entity->id, $position, Payload::encode($mutation),
             ]);
         } catch (\PDOException $exception) {
             // An abandoned row keeps its id, so re-queuing under the same
@@ -98,11 +107,11 @@ class PdoOutboxStore implements OutboxStore
         $this->run('DELETE FROM sync_outbox_names WHERE space = ? AND entity_type = ? AND handle = ?', [$from->space, $from->type, $from->id]);
         $this->run('INSERT INTO sync_outbox_names (space, entity_type, handle, name) VALUES (?, ?, ?, ?)', [$from->space, $from->type, $from->id, $to->id]);
 
-        // The space and type are columns, the id is only inside the payload, so
-        // the rows are narrowed by column and then matched exactly on the key.
+        // Found by index on the id column; a row queued before that column
+        // existed has NULL there and is matched by decoding it.
         $rows = $this->rows(
-            'SELECT mutation_id, payload FROM sync_outbox WHERE space = ? AND entity_type = ? AND abandoned_reason IS NULL',
-            [$from->space, $from->type],
+            'SELECT mutation_id, payload FROM sync_outbox WHERE space = ? AND entity_type = ? AND (entity_id = ? OR entity_id IS NULL) AND abandoned_reason IS NULL',
+            [$from->space, $from->type, $from->id],
         );
 
         foreach ($rows as $row) {
@@ -110,8 +119,8 @@ class PdoOutboxStore implements OutboxStore
             if (! $mutation->entity->equals($from)) {
                 continue;
             }
-            $this->run('UPDATE sync_outbox SET space = ?, entity_type = ?, payload = ? WHERE mutation_id = ?', [
-                $to->space, $to->type, Payload::encode($mutation->withEntity($to)), $row[0],
+            $this->run('UPDATE sync_outbox SET space = ?, entity_type = ?, entity_id = ?, payload = ? WHERE mutation_id = ?', [
+                $to->space, $to->type, $to->id, Payload::encode($mutation->withEntity($to)), $row[0],
             ]);
         }
     }
@@ -203,6 +212,27 @@ class PdoOutboxStore implements OutboxStore
         }
 
         return (int) ($this->scalar('SELECT COUNT(*) FROM sync_outbox WHERE abandoned_reason IS NULL AND entity_type = ?', [$entityType]) ?? '0');
+    }
+
+    /** @return list<string> Lowercased column names of one table. */
+    private function columns(string $table): array
+    {
+        $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+        [$sql, $bindings] = match ($driver) {
+            'sqlite' => ['SELECT name FROM pragma_table_info(?)', [$table]],
+            'mysql' => ['SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [$table]],
+            default => ['SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?', [$table]],
+        };
+        $statement = $this->pdo->prepare($sql);
+        $statement->execute($bindings);
+        $names = [];
+        foreach ($statement->fetchAll(\PDO::FETCH_COLUMN) as $name) {
+            if (is_string($name)) {
+                $names[] = strtolower($name);
+            }
+        }
+
+        return $names;
     }
 
     public function queued(): array

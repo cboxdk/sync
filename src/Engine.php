@@ -64,7 +64,13 @@ class Engine
             }
             $ack = $ledger->acknowledged($mutation->replica);
             if ($mutation->sequence->value <= $ack) {
-                throw new ProtocolException('Sequence reused with a different mutation identity');
+                // A number this stream already used, under an identity with no
+                // receipt: the writer is BEHIND - its state restored from an
+                // older backup. Answered like a gap, with where the stream really
+                // is, so it renumbers upward and goes on. Refusing it as a
+                // protocol violation abandoned every write after the restore,
+                // permanently, one by one.
+                return new MutationResult(MutationStatus::MutationGap, reason: 'sequence_behind', acknowledgedSequence: $ack);
             }
             if ($mutation->sequence->value !== $ack + 1) {
                 return new MutationResult(MutationStatus::MutationGap, reason: 'expected_sequence_'.($ack + 1), acknowledgedSequence: $ack);
@@ -197,7 +203,15 @@ class Engine
             return [];
         }
         $previous = $ledger->receipt($mutation->dependsOn);
-        if ($previous === null || $previous->mutation->replica->id !== $mutation->replica->id || $previous->mutation->entity->key() !== $mutation->entity->key() || $previous->mutation->sequence->value >= $mutation->sequence->value) {
+        if ($previous === null) {
+            // Unknown - never processed, or its receipt pruned with the log.
+            // Either way there is no knowledge to inherit, and inheriting none
+            // is the safe answer: the write is judged on its own base, and at
+            // worst preserves a conflict with the device's own earlier edit.
+            // Refusing it used to abandon a legitimate write after a prune.
+            return [];
+        }
+        if ($previous->mutation->replica->id !== $mutation->replica->id || $previous->mutation->entity->key() !== $mutation->entity->key() || $previous->mutation->sequence->value >= $mutation->sequence->value) {
             throw new InvalidRequest('Dependency must be a processed earlier mutation for the same replica, space and entity');
         }
 
@@ -286,7 +300,11 @@ class Engine
             // The whole mutation, not the fields that happened to be fresh:
             // applying half of an edit the writer is about to rethink would
             // leave the record in a state nobody chose.
-            return new MutationResult(MutationStatus::PullRequired, $record->version, reason: 'pull_required', conflicts: $stale);
+            // With every decision, not only the refused fields: a field the
+            // resolver kept for the server is not stale - it is settled - and a
+            // writer that rebased onto this version without knowing would send
+            // it again and win it.
+            return new MutationResult(MutationStatus::PullRequired, $record->version, reason: 'pull_required', decisions: $decisions, conflicts: $stale);
         }
         if ($mutation->atomic && $groups !== []) {
             $pending = [];

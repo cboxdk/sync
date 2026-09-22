@@ -2,9 +2,12 @@
 
 declare(strict_types=1);
 
+use Cbox\Sync\Contracts\ConflictResolver;
+use Cbox\Sync\Data\ConflictContext;
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Engine;
+use Cbox\Sync\Enums\ConflictDecision;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Enums\MutationStatus;
 use Cbox\Sync\Enums\OnConflict;
@@ -123,4 +126,30 @@ it('answers a replay from its receipt, whatever the mode', function () {
     $again = $engine->process(staleEdit(base: 2));
 
     expect($again)->toEqual($first);
+});
+
+/**
+ * A field the resolver kept for the server is settled, not stale. The refusal
+ * says so; without it, a writer that rebased onto the reported version sent
+ * that field again and won it.
+ */
+it('tells the writer which fields the server kept, so a rebase cannot take them back', function () {
+    $store = $this->syncStore();
+    $resolver = new class implements ConflictResolver
+    {
+        public function resolve(ConflictContext $context): ConflictDecision
+        {
+            return $context->operation->field === 'body' ? ConflictDecision::Server : ConflictDecision::Preserve;
+        }
+    };
+    $engine = new Engine($store, $resolver);
+    $key = new EntityKey('test', 'notes', 'one');
+    staleSetup($engine, $key);
+    $engine->process(new Mutation('other-body', $key, new Replica('other'), new MutationSequence(2), MutationKind::Update, new RecordVersion(2), [Op::set('body', 'theirs')]));
+
+    $result = $engine->process(staleEdit(), onConflict: OnConflict::Pull);
+
+    expect($result->status)->toBe(MutationStatus::PullRequired)
+        ->and(array_keys($result->conflicts))->toBe(['title'])
+        ->and($result->decisions['body'] ?? null)->toBe(ConflictDecision::Server);
 });

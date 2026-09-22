@@ -148,11 +148,23 @@ class PdoSchema
             );
             $lookup->execute([$table['name']]);
             $stale = array_map('strtolower', array_filter($lookup->fetchAll(\PDO::FETCH_COLUMN), is_string(...)));
+
+            // Only the identity columns this schema pins a collation on. A
+            // payload column that merely inherited the database's default is
+            // not ours to retype, and touching it made every migrate() issue
+            // an ALTER.
+            $modify = [];
             foreach ($table['columns'] as $definition) {
                 $column = (string) strtok($definition, ' ');
-                if (in_array(strtolower($column), $stale, true)) {
-                    $connection->exec(sprintf('ALTER TABLE %s MODIFY %s', $table['name'], $definition));
+                if (str_contains($definition, 'COLLATE') && in_array(strtolower($column), $stale, true)) {
+                    $modify[] = 'MODIFY '.$definition;
                 }
+            }
+            // One ALTER per table, not per column: a collation change on a
+            // key column is a full table copy with writes blocked, and doing
+            // it once per column multiplied that by the column count.
+            if ($modify !== []) {
+                $connection->exec(sprintf('ALTER TABLE %s %s', $table['name'], implode(', ', $modify)));
             }
         }
     }

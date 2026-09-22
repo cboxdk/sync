@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.0 - Unreleased
+
+### Added
+
+- **A writer can decide its own conflicts.** `Engine::process()` takes an optional `OnConflict`. With `OnConflict::Pull`, a field the resolver would have preserved is refused instead: status `pull_required`, and nothing is stored - no record change, no conflict group, no receipt, no acknowledgement, no commit. `MutationResult::$conflicts` names the contested fields and `$recordVersion` the version that carries them, and the writer sends the same mutation again, rebased on that version. Decisions the resolver makes itself - client wins, server wins, reject - are untouched, so a writer cannot use this to get around them. `Mutation::rebased()`, `Outbox::rebase()`.
+- **The outbox gives a device what it was missing:** `requeue()` and `dismiss()` for an abandoned write, `nameOf()` for what a created record was called, and a rewrite of the fields the application names as references when a created record is named, so a child created offline reaches the server pointing at its parent's real id.
+- `Contracts\OutboxStore` gains `replace()`, `resetAcknowledged()`, `nameOf()`, `dismiss()` and `queued()`, and `head()` takes a space.
+
+### Fixed
+
+- **A device's numbering could disagree with the server's.** Each entity type and space a device writes to is now its own replica stream. The server numbers per replica per space and maps types and scopes to spaces by rules the device cannot see; one stream per (type, space) keeps both sides counting the same thing, where a single lost response used to make a write collide and be abandoned for good.
+- **A device ahead of the server could never push again.** `resumeAfter()` now sets the acknowledgement exactly, downward too - a gap is only reported when the server is behind, after a restore. Ordinary acknowledgements still only rise, so two overlapping deliveries cannot wind the counter back.
+- **Acknowledging a create and renaming what is queued behind it are one transaction.** A crash between them used to leave updates addressed to a handle nothing could resolve.
+- **MySQL treated `a` and `a ` as the same identifier.** `utf8mb4_bin` pads with spaces, and a mutation id differing only by a trailing space was answered with another mutation's receipt. Identity columns use `utf8mb4_0900_bin`, and `migrate()` retypes older installations. MySQL 8.0.17 or later is required.
+- **One oversized identifier could stop every bootstrap of its view.** Identifiers are capped at 150 characters - what the columns hold - and may not contain NUL, in `EntityKey`, `Replica` and `Mutation`, so every entry point inherits it.
+- **A preserved candidate skipped the value checks.** A conflict leaves the record unchanged, so the validator never saw the value being kept. The record is now also validated as it would be if the candidate were chosen.
+- **Receipts grew without bound.** `prune()` drops the receipts written in the commits it removes.
+- A change could be recorded as a `Record` carrying no record; found by the strict analysis rules.
+
+### Performance
+
+- **The log stores about a tenth of what it did.** Payloads are deflated (format 2): a one-field edit on a ten-field record went from ~22KB of commit to ~2.6KB, for ~20µs more per write. Inflating is bounded at 16MB. Formats 0 and 1 are still read. Requires `ext-zlib`.
+- Delta narrowing reads two index ranges instead of an `OR` the SQLite planner could not index.
+
+### Upgrading
+
+- Run `migrate()`: it adds `sync_receipts.commit_sequence` and retypes MySQL identity columns.
+- **Drain device queues before upgrading the client side if you can.** The replica identity a device sends now names its stream. A write sent before the upgrade whose response was lost is refused as reused on retry after it, and reported abandoned although it landed.
+- Format-2 payloads cannot be read by 0.8.x; a downgrade after writing is refused by name.
+
 ## 0.8.0 - 2026-09-21
 
 ### Added

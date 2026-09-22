@@ -156,7 +156,10 @@ class Payload
             $decoded = self::inflate($decoded);
         }
 
-        $value = unserialize($decoded, ['allowed_classes' => self::ALLOWED]);
+        $value = self::quietly(static fn (): mixed => unserialize($decoded, ['allowed_classes' => self::ALLOWED]));
+        if ($value === false && $decoded !== serialize(false)) {
+            throw new ProtocolException('Stored payload is not a serialized value');
+        }
 
         // A class outside the allowed set does not fail - it decodes to an
         // incomplete object, and nested ones would pass the type check below
@@ -202,6 +205,12 @@ class Payload
             }
         }
 
+        // A stream cut short inflates to a prefix without complaint; only the
+        // end marker says the payload is whole.
+        if (inflate_get_status($stream) !== ZLIB_STREAM_END) {
+            throw new ProtocolException('Stored payload is truncated deflate data');
+        }
+
         return $inflated;
     }
 
@@ -210,9 +219,12 @@ class Payload
      * is what this class acts on; the warning would only reach a host's error
      * handler as noise about a row that is already being refused by name.
      *
-     * @param  \Closure(): (string|false)  $call
+     * @template TResult
+     *
+     * @param  \Closure(): TResult  $call
+     * @return TResult
      */
-    private static function quietly(\Closure $call): string|false
+    private static function quietly(\Closure $call): mixed
     {
         set_error_handler(static fn (): bool => true);
         try {
