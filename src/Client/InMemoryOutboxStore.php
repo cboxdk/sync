@@ -130,9 +130,31 @@ class InMemoryOutboxStore implements OutboxStore
         return null;
     }
 
-    public function markAttempted(string $mutationId): void
+    public function markSent(Mutation $numbered): void
     {
-        $this->attempted[$mutationId] = true;
+        $this->replace($numbered);
+        $this->attempted[$numbered->id] = true;
+    }
+
+    public function unmarkSent(string $mutationId): void
+    {
+        unset($this->attempted[$mutationId]);
+    }
+
+    public function isSent(string $mutationId): bool
+    {
+        return isset($this->attempted[$mutationId]);
+    }
+
+    public function inFlight(Replica $replica, string $space): ?Mutation
+    {
+        foreach ($this->queue as $mutation) {
+            if (isset($this->attempted[$mutation->id]) && $mutation->replica->id === $replica->id && $mutation->entity->space === $space) {
+                return $mutation;
+            }
+        }
+
+        return null;
     }
 
     public function relabel(string $entityType, string $from, string $to): void

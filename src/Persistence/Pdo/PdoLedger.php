@@ -146,8 +146,15 @@ class PdoLedger implements Ledger
 
     public function acknowledge(Replica $replica, int $sequence): void
     {
-        $this->run('DELETE FROM sync_streams WHERE space = ? AND replica_id = ?', [$this->space, $replica->id]);
-        $this->run('INSERT INTO sync_streams (space, replica_id, acknowledged) VALUES (?, ?, ?)', [$this->space, $replica->id, $sequence]);
+        // In place, not delete-and-insert: the row also carries how far this
+        // stream's receipts were pruned, and replacing it reset that to zero -
+        // after which a pruned replay was renumbered and applied twice.
+        if ($this->scalar('SELECT 1 FROM sync_streams WHERE space = ? AND replica_id = ?', [$this->space, $replica->id]) === null) {
+            $this->run('INSERT INTO sync_streams (space, replica_id, acknowledged) VALUES (?, ?, ?)', [$this->space, $replica->id, $sequence]);
+
+            return;
+        }
+        $this->run('UPDATE sync_streams SET acknowledged = ? WHERE space = ? AND replica_id = ?', [$sequence, $this->space, $replica->id]);
     }
 
     public function appendCommit(CommitSequence $sequence, array $changes): Commit

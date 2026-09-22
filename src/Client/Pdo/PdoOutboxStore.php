@@ -202,9 +202,26 @@ class PdoOutboxStore implements OutboxStore
         return $payload === null ? null : Payload::decode($payload, Mutation::class);
     }
 
-    public function markAttempted(string $mutationId): void
+    public function markSent(Mutation $numbered): void
     {
-        $this->run('UPDATE sync_outbox SET attempted = 1 WHERE mutation_id = ?', [$mutationId]);
+        $this->run('UPDATE sync_outbox SET attempted = 1, payload = ? WHERE mutation_id = ?', [Payload::encode($numbered), $numbered->id]);
+    }
+
+    public function unmarkSent(string $mutationId): void
+    {
+        $this->run('UPDATE sync_outbox SET attempted = 0 WHERE mutation_id = ?', [$mutationId]);
+    }
+
+    public function isSent(string $mutationId): bool
+    {
+        return $this->scalar('SELECT attempted FROM sync_outbox WHERE mutation_id = ?', [$mutationId]) === '1';
+    }
+
+    public function inFlight(Replica $replica, string $space): ?Mutation
+    {
+        $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE replica_id = ? AND space = ? AND attempted = 1 AND abandoned_reason IS NULL ORDER BY queued_at, mutation_id LIMIT 1', [$replica->id, $space]);
+
+        return $payload === null ? null : Payload::decode($payload, Mutation::class);
     }
 
     public function relabel(string $entityType, string $from, string $to): void

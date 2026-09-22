@@ -61,7 +61,13 @@ arrive. The device is wedged permanently. Numbering at send time makes that hole
 impossible, and it is why `head()` returns a mutation numbered for this attempt
 rather than the one that was stored.
 
-A transport sends `head()` and reports back exactly one of four outcomes:
+Once handed out, a write keeps its number for every resend, and while one on a
+stream is waiting for its answer, that stream sends it again before numbering
+anything else. A write may also be sent out of queue order with `take()` - a
+parent's create ahead of the child that points at it - and the same rule keeps
+it from claiming a number another write already used.
+
+A transport sends `head()` and reports back exactly one of these outcomes:
 
 | Outcome | Call | Why |
 |---|---|---|
@@ -69,8 +75,9 @@ A transport sends `head()` and reports back exactly one of four outcomes:
 | server is busy | nothing; send the same mutation again | the engine returns the stored result for a repeated id, so only an unchanged id is safe |
 | server has not seen everything before this | `resumeAfter($acknowledgedSequence)` | drops only what it already has; the rest go again in order |
 | terminal for this identity | `abandon($mutation, $reason)` | it can never be sent again, so it leaves the queue instead of blocking everything behind it |
+| `receipt_pruned` | `settledUnknown($mutation)` | it may have been applied and nobody can say; it takes its own position so the replays behind it keep theirs |
 
-Getting any of those four wrong is silent data loss or a permanently wedged
+Getting any of those wrong is silent data loss or a permanently wedged
 queue, which is why they are implemented once here rather than in each
 application. Abandoned mutations are kept with their reason and must be
 surfaced: nothing else will tell the user that a write is never going to land.

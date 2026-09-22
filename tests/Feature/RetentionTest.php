@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Enums\MutationStatus;
 use Cbox\Sync\Exceptions\HistoryUnavailable;
+use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Persistence\InMemoryStore;
 use Cbox\Sync\Tests\Fixtures\ViewScenario;
 use Cbox\Sync\ValueObjects\CommitSequence;
@@ -94,9 +95,9 @@ it('prunes the receipts written in the commits it drops, and keeps the rest', fu
 
 /**
  * Past the horizon a replay has no receipt to be answered from, and it cannot
- * be told apart from a new write. It is final - never renumbered, which would
- * apply it a second time - but the answer says where the stream is, so the
- * writer abandons that one write and carries on with the next.
+ * be told apart from a new write. It is final, never renumbered - which would
+ * apply it a second time - and the writer takes its own position as
+ * acknowledged (Outbox::settledUnknown) and goes on with the next.
  */
 it('refuses a replay whose receipt was pruned, and tells the writer where to go on from', function () {
     $this->seedRecord();
@@ -142,4 +143,31 @@ it('treats a pruned dependency as no knowledge rather than refusing the write', 
     $dependent = $this->write('a', 2, [Op::set('title', 'next')], base: 2, dependsOn: 'a-1');
 
     expect($dependent->status)->toBe(MutationStatus::Applied);
+});
+
+/**
+ * The PDO ledger replaced the stream row on every acknowledgement, which reset
+ * the pruned mark: after one more write, a pruned replay was renumbered and
+ * applied again. The mark has to survive the stream moving on.
+ */
+it('still refuses a pruned replay after the stream has moved on', function () {
+    $this->seedRecord();
+    foreach (range(1, 5) as $sequence) {
+        $this->write('a', $sequence, [Op::set('title', 't'.$sequence)], base: $sequence);
+    }
+    $this->store->prune('test', new CommitSequence(5));
+    $this->write('a', 6, [Op::set('title', 'later')], base: 6);
+
+    $replay = $this->write('a', 3, [Op::set('title', 't3')], base: 3);
+
+    expect($replay->status)->toBe(MutationStatus::ReceiptPruned)
+        ->and($this->record()->value('title')->value())->toBe('later');
+});
+
+/** A field name is a key too, and a NUL in one made PostgreSQL match another field's filter. */
+it('holds field names to the identifier rules', function () {
+    $this->seedRecord();
+
+    expect(fn () => $this->write('a', 1, [Op::set("project\0x", 'alpha')]))->toThrow(InvalidRequest::class, 'NUL')
+        ->and(fn () => $this->write('a', 1, [Op::set(str_repeat('f', 151), 'x')]))->toThrow(InvalidRequest::class);
 });

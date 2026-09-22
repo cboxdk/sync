@@ -608,3 +608,37 @@ it('fills in the id column for rows queued before it existed', function () {
 
     expect($outbox->queuedKey('notes', 'legacy')?->space)->toBe('team-1');
 });
+
+/**
+ * A device restored from a backup replays writes whose answers were pruned.
+ * Each one is final and takes its own position; jumping to the server's
+ * position renumbered the rest above the pruned range and applied them again.
+ */
+it('settles a pruned replay at its own position, so the next replay keeps its number', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    foreach (['a', 'b'] as $id) {
+        $outbox->queue(note($id), MutationKind::Update, [Op::set('t', $id)], 1);
+    }
+
+    $first = $outbox->head() ?? throw new LogicException('expected a head');
+    $outbox->settledUnknown($first);
+    $second = $outbox->head() ?? throw new LogicException('expected the next');
+
+    expect($first->sequence->value)->toBe(1)
+        ->and($second->sequence->value)->toBe(2)
+        ->and($outbox->abandoned()[0]['reason'])->toBe('receipt_pruned');
+})->with(outboxStores());
+
+/** A write handed out keeps its number, and a stream sends a waiting write before numbering another. */
+it('keeps a sent write\'s number and sends it before anything else on its stream', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('x'), MutationKind::Create, [Op::set('t', 'x')], 0);
+    $outbox->queue(note('p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+    $parent = $outbox->take($outbox->queuedCreate('notes', 'p')?->id ?? '') ?? throw new LogicException('expected p');
+    expect($parent->sequence->value)->toBe(1);
+
+    // Its answer is lost. Whatever is asked for next on this stream, p goes again, as 1.
+    $again = $outbox->head() ?? throw new LogicException('expected a head');
+
+    expect($again->id)->toBe($parent->id)->and($again->sequence->value)->toBe(1);
+})->with(outboxStores());

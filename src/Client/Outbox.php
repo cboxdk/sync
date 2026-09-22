@@ -122,29 +122,101 @@ class Outbox
         return $mutation === null ? null : $this->handOut($mutation);
     }
 
+    /**
+     * Number a write for sending - once.
+     *
+     * A write already handed out keeps its number on every resend, and while
+     * one on a stream is waiting for its answer that is the write the stream
+     * sends, whatever was asked for. Numbering afresh each time let a write
+     * sent out of queue order claim a number another write had already used
+     * on the server, and a lost response then made one of the two look like a
+     * reused identity - abandoned, although it had landed.
+     */
     private function handOut(Mutation $mutation): Mutation
     {
-        // From here on it may be on the server, so it is never rewritten.
-        $this->store->markAttempted($mutation->id);
-
         // The stream it was queued on. A write queued before streams existed
         // carries the bare device id and goes out on that stream, numbered as
         // it always was - its retry and its depends_on still match.
         $stream = $mutation->replica;
+        $space = $mutation->entity->space;
 
-        return new Mutation(
-            $mutation->id,
-            $mutation->entity,
-            $stream,
-            new MutationSequence($this->store->acknowledged($stream, $mutation->entity->space) + 1),
-            $mutation->kind,
-            $mutation->baseVersion,
-            $mutation->operations,
-            $mutation->atomic,
-            $mutation->dependsOn,
-            $mutation->resolution,
-            $mutation->expectedVersion,
-        );
+        return $this->store->transaction(function () use ($mutation, $stream, $space): Mutation {
+            $waiting = $this->store->inFlight($stream, $space);
+            if ($waiting !== null) {
+                return $waiting;
+            }
+            $numbered = new Mutation(
+                $mutation->id,
+                $mutation->entity,
+                $stream,
+                new MutationSequence($this->store->acknowledged($stream, $space) + 1),
+                $mutation->kind,
+                $mutation->baseVersion,
+                $mutation->operations,
+                $mutation->atomic,
+                $mutation->dependsOn,
+                $mutation->resolution,
+                $mutation->expectedVersion,
+            );
+            $this->store->markSent($numbered);
+
+            return $numbered;
+        });
+    }
+
+    /**
+     * Put a write that has not been sent under every name the server has
+     * given since it was queued - its record, the scope it lives in, the
+     * records it points at. A write queued after its parent was named, by
+     * another process say, still carries the handle.
+     *
+     * @param  array<string, array<string, string>>  $references
+     * @param  array<string, string>  $scopedBy
+     * @return bool whether anything changed
+     */
+    public function mapNames(Mutation $mutation, array $references, array $scopedBy): bool
+    {
+        return $this->store->transaction(function () use ($mutation, $references, $scopedBy): bool {
+            if ($this->store->isSent($mutation->id)) {
+                return false;
+            }
+            $type = $mutation->entity->type;
+            $changed = false;
+
+            $parentType = $scopedBy[$type] ?? null;
+            $space = $parentType === null ? null : $this->store->namedAs($parentType, $mutation->entity->space);
+            if ($space !== null && $space !== $mutation->entity->space) {
+                $this->store->relabel($type, $mutation->entity->space, $space);
+                $changed = true;
+            }
+            $current = $this->store->find($mutation->id) ?? $mutation;
+
+            $id = $mutation->kind === MutationKind::Create ? null : $this->store->namedAs($type, $current->entity->id);
+            if ($id !== null && $id !== $current->entity->id) {
+                $this->store->rekey($current->entity, new EntityKey($current->entity->space, $type, $id));
+                $changed = true;
+                $current = $this->store->find($mutation->id) ?? $current;
+            }
+
+            $operations = [];
+            $rewritten = false;
+            foreach ($current->operations as $operation) {
+                $target = $references[$type][$operation->field] ?? null;
+                $value = $operation->value->exists ? $operation->value->value() : null;
+                $name = $target !== null && is_string($value) ? $this->store->namedAs($target, $value) : null;
+                if ($name !== null && $name !== $value) {
+                    $operation = FieldOperation::set($operation->field, $name);
+                    $rewritten = true;
+                }
+                $operations[] = $operation;
+            }
+            if ($rewritten) {
+                $this->store->replace($current->rebased($current->baseVersion, $operations));
+                $changed = true;
+            }
+
+            return $changed;
+        });
     }
 
     /** A create for this record still waiting to be sent, or null. */
@@ -348,7 +420,12 @@ class Outbox
         // if the counter is still where this attempt numbered from - two
         // deliveries can get the same answer, and the late one must not wind
         // back what the other has since sent.
-        $this->store->resetAcknowledged($mutation->replica, $mutation->entity->space, $acknowledgedSequence, $mutation->sequence->value - 1);
+        $this->store->transaction(function () use ($mutation, $acknowledgedSequence): void {
+            $this->store->resetAcknowledged($mutation->replica, $mutation->entity->space, $acknowledgedSequence, $mutation->sequence->value - 1);
+            // The server has not got it at that number: it goes again under a
+            // new one.
+            $this->store->unmarkSent($mutation->id);
+        });
     }
 
     /**
@@ -373,6 +450,23 @@ class Outbox
         $device = strlen($this->replica->id) <= Identifier::MAX_LENGTH - 17 ? $this->replica->id : hash('sha256', $this->replica->id);
 
         return new Replica($device.'#'.substr(hash('sha256', $entity->type."\0".$entity->space), 0, 16));
+    }
+
+    /**
+     * The answer to receipt_pruned: this write may already have been applied
+     * and nobody can say. It leaves the queue as abandoned, so the application
+     * can tell the user, and its OWN position counts as acknowledged - the next
+     * write on the stream goes out at the next position, where a replay of an
+     * older one is again answered from its receipt or refused the same way.
+     * Jumping to the server's position instead renumbered those replays past
+     * the pruned range, and they were applied a second time.
+     */
+    public function settledUnknown(Mutation $mutation): void
+    {
+        $this->store->transaction(function () use ($mutation): void {
+            $this->store->setAcknowledged($mutation->replica, $mutation->entity->space, $mutation->sequence->value);
+            $this->store->abandon($mutation->id, 'receipt_pruned');
+        });
     }
 
     /**

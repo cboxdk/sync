@@ -33,6 +33,11 @@ final class Identifier
         self::check($mutation->entity->type, 'Entity type');
         self::check($mutation->entity->id, 'Entity id');
         self::check($mutation->replica->id, 'Replica identity');
+        // Field names are keys too - sync_fields.field - and a NUL in one
+        // made PostgreSQL match it against another field's filter.
+        foreach ($mutation->operations as $operation) {
+            self::check($operation->field, 'Field name');
+        }
     }
 
     public static function check(string $value, string $what): void

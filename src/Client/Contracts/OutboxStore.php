@@ -136,11 +136,24 @@ interface OutboxStore
     public function find(string $mutationId): ?Mutation;
 
     /**
-     * Note that this write has been handed out for sending. From then on it
-     * may be on the server, so it is never rewritten - a changed write under
-     * the same identity would be refused as reused.
+     * Keep this write as handed out: numbered, and from then on possibly on
+     * the server. Its number is kept for every resend, and it is never
+     * rewritten - a changed write under the same identity would be refused as
+     * reused.
      */
-    public function markAttempted(string $mutationId): void;
+    public function markSent(Mutation $numbered): void;
+
+    /** The server said it has not got this write: it may be renumbered and rewritten again. */
+    public function unmarkSent(string $mutationId): void;
+
+    public function isSent(string $mutationId): bool;
+
+    /**
+     * The write on this stream that was handed out and is still waiting for
+     * its answer, if any. A stream never numbers a new write while one is:
+     * two writes could otherwise claim the same number.
+     */
+    public function inFlight(Replica $replica, string $space): ?Mutation;
 
     /**
      * Move queued writes of one type from one space label to another - the

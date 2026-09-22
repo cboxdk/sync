@@ -68,8 +68,10 @@ class Engine
             if ($mutation->sequence->value <= $ack && $mutation->sequence->value <= $ledger->prunedThrough($mutation->replica)) {
                 // A position whose receipt was pruned: this could be a replay
                 // of a write that was applied, and renumbering it would apply
-                // it twice. So this mutation is final - but the answer says
-                // where the stream is, so the writer can go on with the next.
+                // it twice. So this mutation is final, and the writer takes
+                // THIS position as acknowledged (Outbox::settledUnknown) - not
+                // the stream's position, which would renumber the replays
+                // queued behind it above the pruned range.
                 return new MutationResult(MutationStatus::ReceiptPruned, reason: 'receipt_pruned', acknowledgedSequence: $ack);
             }
             if ($mutation->sequence->value <= $ack) {
