@@ -308,9 +308,10 @@ class Outbox
     /** A create for this record still waiting to be sent, or null. */
     public function queuedCreate(string $entityType, string $entityId): ?Mutation
     {
-        $first = $this->store->firstFor($entityType, $entityId);
-
-        return $first !== null && $first->kind === MutationKind::Create ? $first : null;
+        // Wherever it sits: an edit queued before a create for the same record
+        // - a record created again after its first create was refused - does
+        // not make the create any less the record's first write on the server.
+        return $this->store->createFor($entityType, $entityId);
     }
 
     /** Whether this record's create was abandoned - it will not exist unless the application requeues it. */
@@ -439,9 +440,15 @@ class Outbox
             $this->store->acknowledge($mutation->id);
             if ($mutation->kind === MutationKind::Create) {
                 $this->store->forgetDismissedCreates($mutation->entity->type, $mutation->entity->id);
+                if ($named === null || $named->equals($mutation->entity)) {
+                    // The record exists under its own id - a server that keeps
+                    // the device's. Recorded all the same, so nothing waiting
+                    // on an earlier, refused create for it stays blocked.
+                    $this->store->rekey($mutation->entity, $mutation->entity, creates: false);
+                }
             }
             if ($named !== null && ! $named->equals($mutation->entity)) {
-                $this->store->rekey($mutation->entity, $named);
+                $this->store->rekey($mutation->entity, $named, creates: false);
                 $this->rewriteReferences($mutation->entity, $named->id, $references);
                 foreach ($scopedBy as $type => $parentType) {
                     if ($parentType === $named->type) {
@@ -520,8 +527,8 @@ class Outbox
         $scopedBy ??= $this->scopedBy;
         $named = new EntityKey($handle->space, $handle->type, $name);
         $this->store->transaction(function () use ($handle, $named, $references, $scopedBy): void {
-            $create = $this->store->abandonedCreate($handle->type, $handle->id);
-            if ($create === null || ! $create['mutation']->entity->equals($handle)) {
+            $create = $this->store->abandonedCreate($handle->type, $handle->id, $handle->space);
+            if ($create === null) {
                 // Only a record this device created and gave up on: renaming
                 // anything else would move writes that are not about it -
                 // another tenant's, with an id that happens to match.
@@ -734,6 +741,12 @@ class Outbox
                 if ($old->id !== $mutationId) {
                     continue;
                 }
+                if ($old->kind === MutationKind::Create && ($this->queuedCreate($old->entity->type, $old->entity->id) !== null || $this->store->namedAs($old->entity->type, $old->entity->id) !== null)) {
+                    // The record was created again since, or exists by a name:
+                    // a second create would be refused as entity_exists, and
+                    // its refusal would block the live record's edits.
+                    throw new InvalidRequest(sprintf('Write %s creates a record that has been created again since; dismiss it instead.', $mutationId));
+                }
                 if ((in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->unanswered($old->id) > 0) && ! $evenIfItMayHaveLanded) {
                     // Sent again under a new identity, a write the server may
                     // already hold is applied twice - a create becomes two
@@ -768,7 +781,7 @@ class Outbox
                     // named: sent now, it would carry a handle the server never
                     // heard of. Requeue that create first, or - if it turned
                     // out to exist - record its name with found().
-                    throw new InvalidRequest(sprintf('Write %s needs %s %s, whose create was abandoned and never named; requeue that create first, or record its name with found().', $mutationId, $blocked[0], $blocked[1]));
+                    throw new InvalidRequest(sprintf('Write %s needs %s %s, whose create was abandoned and never named; requeue that create or queue a new one, or - if it exists on the server - record its name with found() (the handle itself, if the server kept it).', $mutationId, $blocked[0], $blocked[1]));
                 }
 
                 return $this->append($key, $old->kind, $operations, $old->baseVersion->value, $old->atomic, $old->resolution, null);
@@ -818,7 +831,9 @@ class Outbox
             // the server never heard of. When it may exist they are
             // parent_unknown: find it, then requeue them under its name.
             $orphan = $this->mayHaveLandedAs($entry) ? 'parent_unknown' : 'parent_abandoned';
-            if ($this->queuedCreate($old->entity->type, $old->entity->id) === null) {
+            // Nothing to take along once the record exists by a name, or a
+            // create for it is on its way again.
+            if ($this->queuedCreate($old->entity->type, $old->entity->id) === null && $this->store->namedAs($old->entity->type, $old->entity->id) === null) {
                 foreach ($this->dependents($old->entity, $references, $scopedBy) as $dependent) {
                     $this->store->abandon($dependent->id, $orphan);
                     $cascaded++;

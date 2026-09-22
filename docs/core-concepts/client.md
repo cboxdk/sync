@@ -71,10 +71,13 @@ A transport sends `head()` and reports back exactly one of these outcomes:
 
 | Outcome | Call | Why |
 |---|---|---|
-| processed — applied, conflicted or rejected | `acknowledged()` | all three are answers; the mutation is done |
+| processed — applied, no-op, conflicted | `acknowledged($mutation, $named)` | answers; the mutation is done. `$named` is the record's name when the server named a create |
+| processed and refused — `rejected`, `validation_failed`, `precondition_failed` | `refused($mutation, $status)` | the write will never land; kept as abandoned, and a refused create holds back what depends on it |
+| `pull_required` (sent with `OnConflict::Pull`) | `rebase($mutation, $version, $operations)`, then send it again | nothing was stored; the same identity goes again, rethought |
 | server is busy | nothing; send the same mutation again | the engine returns the stored result for a repeated id, so only an unchanged id is safe |
-| server has not seen everything before this | `resumeAfter($acknowledgedSequence)` | drops only what it already has; the rest go again in order |
-| terminal for this identity | `abandon($mutation, $reason)` | it can never be sent again, so it leaves the queue instead of blocking everything behind it |
+| sign in again | `answered($mutation)`, and nothing else | this sending did not land; the write waits |
+| server has not seen everything before this | `resumeAfter($mutation, $acknowledgedSequence)` | drops only what it already has; the rest go again in order |
+| terminal for this identity | `abandon($mutation, $reason)` - `answered: false` if you gave up without an answer | it can never be sent again, so it leaves the queue instead of blocking everything behind it |
 | `receipt_pruned` | `settledUnknown($mutation, $acknowledgedSequence)` | it may have been applied and nobody can say; it takes its own position so the replays behind it keep theirs. When the server is further along the stream than the device - restored from an old backup, or an id reused by a new install - every write still queued on the stream is settled the same way at once, and new writes go on after the server |
 
 Getting any of those wrong is silent data loss or a permanently wedged

@@ -21,7 +21,7 @@ use Cbox\Sync\Engine;
 use Cbox\Sync\Persistence\InMemoryStore;
 use Cbox\Sync\Persistence\Pdo\PdoStore;
 
-// Durable: SQLite, MySQL 8+ or PostgreSQL.
+// Durable: SQLite 3.24+, MySQL 8.0.17+ or PostgreSQL 9.5+ (CI runs MySQL 8.4 and PostgreSQL 17).
 $store = new PdoStore(new PDO('pgsql:host=127.0.0.1;dbname=app', 'app', $password));
 $store->migrate();
 

@@ -16,7 +16,7 @@ The next expected sequence is processed. A higher sequence returns `mutation_gap
 | --- | --- | --- | --- |
 | Permanent domain result | Applied, no-op, partial, preserved conflict; entity missing/deleted/existing; resolver rejection, strict precondition failure, validation failure, stale resolution or invalid candidate | Committed atomically | Advance queue, surface rejection/conflict; use a new mutation to correct intent |
 | Invalid request | Negative version, future base, duplicate field operations, invalid dependency or resolution shape | None | Repair the request before retrying the unacknowledged sequence |
-| Protocol error | Reused ID with changed payload or reused sequence with a new ID | None | Repair client identity/queue handling; never blindly retry changed content |
+| Protocol error | Reused ID with changed payload | None | Repair client identity/queue handling; never blindly retry changed content |
 | Transient failure | Store failure; nested/concurrent store transaction | None | Retry the identical mutation |
 | Mutation gap | Sequence above next expected; or a used sequence under a new ID (`sequence_behind`) | None | Set the counter to the reported acknowledgement and send again |
 | Receipt pruned | A used sequence, with no receipt, at or below the highest pruned position of the stream | None | Final for this write: take **its own** sequence as acknowledged and tell the user its outcome is unknown. Never jump to the reported acknowledgement - that renumbers older replays past the pruned range and applies them twice |

@@ -421,9 +421,9 @@ it('rolls the rename back with the acknowledgement when the step fails', functio
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $durable = new class($pdo) extends PdoOutboxStore
     {
-        public function rekey(EntityKey $from, EntityKey $to): void
+        public function rekey(EntityKey $from, EntityKey $to, bool $creates = true): void
         {
-            parent::rekey($from, $to);
+            parent::rekey($from, $to, $creates);
 
             throw new RuntimeException('the process died here');
         }
@@ -916,6 +916,38 @@ it('does not bring a dismissed write back on a late refusal', function (OutboxSt
     $outbox->refused($write, 'validation_failed');
 
     expect($outbox->abandoned())->toBe([]);
+})->with(outboxStores());
+
+/** A record created again under its id, accepted by a server that kept the id, left everything waiting on its refused first create blocked. */
+it('records a create accepted under its own id, so nothing waits on an earlier refusal', function (OutboxStore $store) {
+    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects']], []);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'bad')], 0);
+    $outbox->refused($outbox->head('projects') ?? throw new LogicException('expected the create'), 'validation_failed');
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'good')], 0);
+    $outbox->acknowledged($outbox->head('projects') ?? throw new LogicException('expected the new create'));
+
+    expect($outbox->orphanReason('projects', 'p'))->toBeNull()
+        ->and(fn () => $outbox->requeue($outbox->abandoned()[0]['mutation']->id))->toThrow(InvalidRequest::class);
+})->with(outboxStores());
+
+/** An edit queued before its record's create was sent first, and refused as entity_not_found. */
+it('finds a record\'s create wherever it sits in the queue', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Update, [Op::set('t', 'edit')], 0);
+    $create = $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'new')], 0);
+
+    expect($outbox->queuedCreate('projects', 'p')?->id)->toBe($create->id);
+})->with(outboxStores());
+
+/** Naming one create renamed another queued for the same handle - a record of its own - and its refusal then blocked the live record. */
+it('leaves another queued create alone when one for the same handle is named', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'first')], 0);
+    $second = $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'second')], 0);
+    $outbox->acknowledged($outbox->head('projects') ?? throw new LogicException('expected the create'), new EntityKey('team-1', 'projects', 'n'));
+
+    expect($outbox->head('projects')?->id)->toBe($second->id)
+        ->and($outbox->head('projects')?->entity->id)->toBe('p');
 })->with(outboxStores());
 
 it('makes a valid stream from a device id of any valid length', function () {

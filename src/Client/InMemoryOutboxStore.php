@@ -31,8 +31,12 @@ class InMemoryOutboxStore implements OutboxStore
 
     private bool $active = false;
 
+    /** @var array<string, int> queue order, as the durable store's position */
+    private array $positions = [];
+
     public function append(Mutation $mutation): void
     {
+        $this->positions[$mutation->id] = count($this->positions) + 1;
         foreach ($this->queue as $queued) {
             if ($queued->id === $mutation->id) {
                 throw new InvalidRequest('Mutation identity is already queued: '.$mutation->id);
@@ -52,15 +56,28 @@ class InMemoryOutboxStore implements OutboxStore
     /** @var array<string, array<string, array<string, string>>> type => handle => space => name */
     private array $handles = [];
 
-    public function rekey(EntityKey $from, EntityKey $to): void
+    public function rekey(EntityKey $from, EntityKey $to, bool $creates = true): void
     {
         $this->names[$from->key()] = $to;
         $this->handles[$from->type][$from->id][$from->space] = $to->id;
         foreach ($this->queue as $index => $mutation) {
-            if ($mutation->entity->equals($from)) {
+            // A create only when asked: after the server named one, another
+            // create queued for the same handle is a record of its own.
+            if ($mutation->entity->equals($from) && ($creates || $mutation->kind !== MutationKind::Create)) {
                 $this->queue[$index] = $mutation->withEntity($to);
             }
         }
+    }
+
+    public function createFor(string $entityType, string $entityId): ?Mutation
+    {
+        foreach ($this->queue as $mutation) {
+            if ($mutation->kind === MutationKind::Create && $mutation->entity->type === $entityType && $mutation->entity->id === $entityId) {
+                return $mutation;
+            }
+        }
+
+        return null;
     }
 
     public function replace(Mutation $mutation): void
@@ -242,17 +259,21 @@ class InMemoryOutboxStore implements OutboxStore
     /** @var array<string, true> */
     private array $dismissed = [];
 
-    public function abandonedCreate(string $entityType, string $entityId): ?array
+    public function abandonedCreate(string $entityType, string $entityId, ?string $space = null): ?array
     {
         $found = null;
+        $rank = null;
         foreach ($this->abandoned as $entry) {
             $mutation = $entry['mutation'];
-            if ($mutation->kind !== MutationKind::Create || $mutation->entity->type !== $entityType || $mutation->entity->id !== $entityId) {
+            if ($mutation->kind !== MutationKind::Create || $mutation->entity->type !== $entityType || $mutation->entity->id !== $entityId
+                || ($space !== null && $mutation->entity->space !== $space)) {
                 continue;
             }
-            // Reported before dismissed, the latest before older ones.
-            if ($found === null || isset($this->dismissed[$found['mutation']->id]) || ! isset($this->dismissed[$mutation->id])) {
-                $found = $entry;
+            // Reported before dismissed, then the one queued last - as the
+            // durable store orders them.
+            $candidate = [isset($this->dismissed[$mutation->id]) ? 0 : 1, $this->positions[$mutation->id] ?? 0];
+            if ($rank === null || $candidate > $rank) {
+                [$found, $rank] = [$entry, $candidate];
             }
         }
 
@@ -320,11 +341,11 @@ class InMemoryOutboxStore implements OutboxStore
             throw new TransientFailure('Nested outbox transaction is unsupported');
         }
         $this->active = true;
-        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles, $this->dismissed];
+        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles, $this->dismissed, $this->positions];
         try {
             return $callback();
         } catch (\Throwable $failure) {
-            [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles, $this->dismissed] = $snapshot;
+            [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles, $this->dismissed, $this->positions] = $snapshot;
 
             throw $failure;
         } finally {

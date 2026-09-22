@@ -47,7 +47,12 @@ interface OutboxStore
      * no store can know which fields are references, so the rename is reported
      * rather than hidden. It is also remembered, for nameOf().
      */
-    public function rekey(EntityKey $from, EntityKey $to): void;
+    /**
+     * $creates: whether a queued create for $from moves too. Not after the
+     * server named one: another create queued for the same handle is a record
+     * of its own.
+     */
+    public function rekey(EntityKey $from, EntityKey $to, bool $creates = true): void;
 
     /**
      * Put a rethought version of a queued mutation in its place.
@@ -126,11 +131,12 @@ interface OutboxStore
      * The abandoned create for this record, if there is one - including one
      * the application has dismissed, which abandoned() no longer lists but
      * which still says its record was never named. One still reported comes
-     * before one dismissed, the latest before older ones.
+     * before one dismissed, the one queued last before those queued earlier;
+     * in one space when $space is given.
      *
      * @return array{mutation: Mutation, reason: string}|null
      */
-    public function abandonedCreate(string $entityType, string $entityId): ?array;
+    public function abandonedCreate(string $entityType, string $entityId, ?string $space = null): ?array;
 
     /** Remove a write from the store altogether, whatever state it is in. */
     public function forget(string $mutationId): void;
@@ -174,6 +180,9 @@ interface OutboxStore
 
     /** The oldest write still queued for this record, or null. */
     public function firstFor(string $entityType, string $entityId): ?Mutation;
+
+    /** A queued create for this record, wherever it sits in the queue, or null. */
+    public function createFor(string $entityType, string $entityId): ?Mutation;
 
     /** A queued write by its identity, or null when it is no longer queued. */
     public function find(string $mutationId): ?Mutation;

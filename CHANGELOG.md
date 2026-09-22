@@ -8,9 +8,13 @@
 - **The outbox gives a device what it was missing:** `requeue()` and `dismiss()` for an abandoned write, `nameOf()` for what a created record was called, and a rewrite of the fields the application names as references when a created record is named, so a child created offline reaches the server pointing at its parent's real id.
 - `Contracts\OutboxStore` gains `replace()`, `resetAcknowledged()`, `nameOf()`, `dismiss()` and `queued()`, and `head()` takes a space.
 
-### Added
-
 - **`Engine::recordTrusted()`** for a host's own writes - a model save - deciding create or update, the base version and the stream position inside the space lock. Deciding them before the lock made concurrent saves race for a position.
+
+### Upgrading
+
+- **Run `migrate()` - or `PdoSchema::forConnection($pdo)->install($pdo)` from your own migration - once after upgrading.** It adds the new receipt and stream columns and indexes, gives receipts from earlier releases their stream position, and on MySQL retypes identity columns to `utf8mb4_0900_bin`, which copies each table: run it in a maintenance window on a large installation. Until it has run, writes fail.
+- A device's `PdoOutboxStore::migrate()` adds its new columns in place on first use; writes queued before the upgrade count as sent once. Back the file up first; downgrading is not supported.
+- `Outbox::abandon()` runs in its own outbox transaction now; do not call it inside one of yours on the same connection.
 
 ### Fixed
 
@@ -40,7 +44,7 @@
 - **MySQL treated `a` and `a ` as the same identifier.** `utf8mb4_bin` pads with spaces, and a mutation id differing only by a trailing space was answered with another mutation's receipt. Identity columns use `utf8mb4_0900_bin`, and `migrate()` retypes older installations. MySQL 8.0.17 or later is required.
 - **One oversized identifier could stop every bootstrap of its view.** Identifiers are capped at 150 characters - what the columns hold - and may not contain NUL, in `EntityKey`, `Replica` and `Mutation`, so every entry point inherits it.
 - **A preserved candidate skipped the value checks.** A conflict leaves the record unchanged, so the validator never saw the value being kept. The record is now also validated as it would be if the candidate were chosen.
-- **Receipts grew without bound.** `prune()` drops the receipts written in the commits it removes. A replay older than the horizon is answered as a gap and applies nothing.
+- **Receipts grew without bound.** `prune()` drops the receipts written in the commits it removes. A replay older than the horizon is answered `receipt_pruned` and applies nothing.
 - Identifiers must be valid UTF-8 - MySQL and PostgreSQL refused anything else with a driver error that SQLite stored.
 - A write handed out for sending is never rewritten by a later rename, since it may already be on the server. Writes scoped by a record created offline move to its name (`scopedBy`), and `requeue()` maps an abandoned write through every name given since. `resetAcknowledged()` is one atomic compare-and-set.
 - **On MySQL, concurrent writers mostly failed.** In one space, a writer inside a host transaction numbered its commit from a snapshot older than the space lock and hit the commits primary key; across spaces, REPEATABLE READ's gap locks on shared indexes made writers deadlock each other (807 deadlocks for 600 writes in six spaces). The store's own transactions run at READ COMMITTED on MySQL now; inside a host's transaction the ledger uses locking reads. A deadlock or lock-wait timeout is a `TransientFailure` on every driver. `bin/concurrency.php` retries only that, counts it, and has a `--spaces=separate` mode that CI runs.

@@ -18,9 +18,11 @@ $store->migrate();
 $engine = new Engine($store);
 ```
 
-`migrate()` creates the tables if they are absent. A host that manages its own
-migrations can read the statements from `PdoSchema::statements()` instead and
-apply them however it prefers.
+`migrate()` creates the tables if they are absent and brings an older schema up
+to date. A host that manages its own migrations calls the same installer from
+one - `PdoSchema::forConnection($pdo)->install($pdo)` - rather than applying the
+bare `CREATE` statements from `statements()`, which leave an existing schema as
+it was.
 
 ## Why writers in a space are serialized
 
@@ -150,8 +152,9 @@ Running the host's connection at READ COMMITTED avoids it altogether.
 ## Keeping an installed schema current
 
 `migrate()` is idempotent and also reconciles: it adds columns and indexes that
-an existing installation is missing, and leaves everything else alone. Nothing is
-dropped or retyped, and a column that is `NOT NULL` with no default is refused by
+an existing installation is missing, retypes MySQL identity columns to a binary
+collation, and gives receipts from earlier releases their stream position.
+Nothing is dropped, and a column that is `NOT NULL` with no default is refused by
 name rather than attempted, because adding one to a table that already holds rows
 cannot work without a backfill the package cannot write for you.
 
@@ -177,8 +180,8 @@ skipping history.
 
 Receipts go with the commits they were written in, so pruning bounds them too.
 A receipt is what answers a replayed mutation; a device that lost a response and
-stays away past the horizon is refused as reusing a sequence when it retries, and
-has to treat that write as final without knowing how it ended. Keep enough
+stays away past the horizon is answered `receipt_pruned` when it retries, and has
+to treat that write as final without knowing how it ended. Keep enough
 history to outlast the longest a device can be away with an unanswered push.
 Receipts written before this column existed have no commit number and are kept.
 

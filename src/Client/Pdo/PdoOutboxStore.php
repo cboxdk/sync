@@ -136,7 +136,7 @@ class PdoOutboxStore implements OutboxStore
         }
     }
 
-    public function rekey(EntityKey $from, EntityKey $to): void
+    public function rekey(EntityKey $from, EntityKey $to, bool $creates = true): void
     {
         $this->run('DELETE FROM sync_outbox_names WHERE space = ? AND entity_type = ? AND handle = ?', [$from->space, $from->type, $from->id]);
         $this->run('INSERT INTO sync_outbox_names (space, entity_type, handle, name) VALUES (?, ?, ?, ?)', [$from->space, $from->type, $from->id, $to->id]);
@@ -150,7 +150,9 @@ class PdoOutboxStore implements OutboxStore
 
         foreach ($rows as $row) {
             $mutation = Payload::decode($row[1], Mutation::class);
-            if (! $mutation->entity->equals($from)) {
+            // A create only when asked: after the server named one, another
+            // create queued for the same handle is a record of its own.
+            if (! $mutation->entity->equals($from) || (! $creates && $mutation->kind === MutationKind::Create)) {
                 continue;
             }
             $this->run('UPDATE sync_outbox SET space = ?, entity_type = ?, entity_id = ?, payload = ? WHERE mutation_id = ?', [
@@ -237,6 +239,18 @@ class PdoOutboxStore implements OutboxStore
         $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NULL ORDER BY queued_at, mutation_id LIMIT 1', [$entityType, $entityId]);
 
         return $payload === null ? null : Payload::decode($payload, Mutation::class);
+    }
+
+    public function createFor(string $entityType, string $entityId): ?Mutation
+    {
+        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NULL ORDER BY queued_at, mutation_id', [$entityType, $entityId]) as [, $payload]) {
+            $mutation = Payload::decode($payload, Mutation::class);
+            if ($mutation->kind === MutationKind::Create) {
+                return $mutation;
+            }
+        }
+
+        return null;
     }
 
     public function find(string $mutationId): ?Mutation
@@ -343,8 +357,9 @@ class PdoOutboxStore implements OutboxStore
 
     public function abandon(string $mutationId, string $reason): void
     {
-        // Never over a dismissed write: a late refusal would report it again.
-        $this->run('UPDATE sync_outbox SET abandoned_reason = ? WHERE mutation_id = ? AND dismissed = 0', [$reason, $mutationId]);
+        // Only a write still queued: a late refusal of one already abandoned,
+        // or dismissed, keeps the first answer and is not reported again.
+        $this->run('UPDATE sync_outbox SET abandoned_reason = ? WHERE mutation_id = ? AND abandoned_reason IS NULL', [$reason, $mutationId]);
     }
 
     public function dismiss(string $mutationId): void
@@ -357,10 +372,16 @@ class PdoOutboxStore implements OutboxStore
         $this->run('UPDATE sync_outbox SET abandoned_reason = ? WHERE mutation_id = ? AND abandoned_reason IS NOT NULL', [$reason, $mutationId]);
     }
 
-    public function abandonedCreate(string $entityType, string $entityId): ?array
+    public function abandonedCreate(string $entityType, string $entityId, ?string $space = null): ?array
     {
-        // Reported before dismissed, the latest before older ones.
-        foreach ($this->rows('SELECT payload, abandoned_reason FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NOT NULL ORDER BY dismissed, queued_at DESC, mutation_id DESC', [$entityType, $entityId]) as [$payload, $reason]) {
+        // Reported before dismissed, then the one queued last.
+        $sql = 'SELECT payload, abandoned_reason FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NOT NULL';
+        $bindings = [$entityType, $entityId];
+        if ($space !== null) {
+            $sql .= ' AND space = ?';
+            $bindings[] = $space;
+        }
+        foreach ($this->rows($sql.' ORDER BY dismissed, queued_at DESC, mutation_id DESC', $bindings) as [$payload, $reason]) {
             $mutation = Payload::decode($payload, Mutation::class);
             if ($mutation->kind === MutationKind::Create) {
                 return ['mutation' => $mutation, 'reason' => $reason];
