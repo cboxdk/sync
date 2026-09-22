@@ -555,20 +555,6 @@ it('never takes another space\'s name for a record\'s own handle', function (Out
     expect($outbox->head('notes', 'team-b')?->entity->id)->toBe('local-1');
 })->with(outboxStores());
 
-/** A reference is not guessed between two spaces that named the same handle differently. */
-it('leaves a reference alone when the handle it names is ambiguous', function (OutboxStore $store) {
-    $outbox = outboxFor($store);
-    foreach (['team-a' => '42', 'team-b' => '99'] as $space => $name) {
-        $outbox->queue(new EntityKey($space, 'projects', 'p'), MutationKind::Create, [Op::set('t', 'x')], 0);
-        $outbox->acknowledged($outbox->head('projects', $space) ?? throw new LogicException('expected a create'), new EntityKey($space, 'projects', $name));
-    }
-    $child = $outbox->queue(new EntityKey('team-a', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
-
-    $outbox->mapNames($child, ['tasks' => ['project_id' => 'projects']], []);
-
-    expect($outbox->head('tasks')?->operations[0]->value->value())->toBe('p');
-})->with(outboxStores());
-
 /** A handle reused for a new record still waiting to be created is that record, not the one named before. */
 it('does not point a reference at an old record when its handle is being created again', function (OutboxStore $store) {
     $outbox = outboxFor($store);
@@ -950,50 +936,48 @@ it('leaves another queued create alone when one for the same handle is named', f
         ->and($outbox->head('projects')?->entity->id)->toBe('p');
 })->with(outboxStores());
 
-/**
- * The same handle in two spaces is two records. One accepted under its own id
- * in space B let a task in space A through, pointing at A's refused create.
- */
-it('keeps a refused create in one space from being released by another space\'s record', function (OutboxStore $store) {
-    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects']], []);
-    $outbox->queue(new EntityKey('team-b', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'b')], 0);
-    $outbox->acknowledged($outbox->head('projects', 'team-b') ?? throw new LogicException('expected B'));
-    $refused = $outbox->queue(new EntityKey('team-a', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'a')], 0);
-    $task = $outbox->queue(new EntityKey('team-a', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
-    $outbox->refused($outbox->head('projects', 'team-a') ?? throw new LogicException('expected A'), 'validation_failed');
-
-    expect($outbox->orphanReason('projects', 'p'))->toBe('parent_abandoned')
-        ->and($outbox->dismiss($refused->id))->toBe(1)
-        ->and($outbox->abandoned()[0]['mutation']->id)->toBe($task->id);
-})->with(outboxStores());
-
-/** A kept id is not a competing name: a rename in another space still rewrites references to its handle. */
-it('rewrites a reference when another space merely kept the same handle as its id', function (OutboxStore $store) {
-    $outbox = outboxFor($store);
-    $outbox->queue(new EntityKey('team-a', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'a')], 0);
-    $outbox->acknowledged($outbox->head('projects', 'team-a') ?? throw new LogicException('expected A'), new EntityKey('team-a', 'projects', 'X'));
-    $outbox->queue(new EntityKey('team-b', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'b')], 0);
-    $outbox->acknowledged($outbox->head('projects', 'team-b') ?? throw new LogicException('expected B'));
-
-    expect($store->namedAs('projects', 'p'))->toBe('X');
-})->with(outboxStores());
-
 /** Finding a record's create decoded every queued write of it, on every write sent: a long drain of edits went quadratic. */
 it('finds a record\'s create without reading its whole queue', function () {
-    $store = new PdoOutboxStore(new PDO('sqlite::memory:'));
-    $store->migrate();
-    $outbox = outboxFor($store);
-    foreach (range(1, 2000) as $n) {
-        $outbox->queue(note('busy'), MutationKind::Update, [Op::set('t', (string) $n)], 1);
-    }
+    $timed = function (int $queued): float {
+        $store = new PdoOutboxStore(new PDO('sqlite::memory:'));
+        $store->migrate();
+        $outbox = outboxFor($store);
+        foreach (range(1, $queued) as $n) {
+            $outbox->queue(new EntityKey('team-1', 'notes', 'other-'.$n), MutationKind::Update, [Op::set('t', (string) $n)], 1);
+        }
+        $outbox->queue(note('busy'), MutationKind::Update, [Op::set('t', 'x')], 1);
+        $started = hrtime(true);
+        foreach (range(1, 300) as $ignored) {
+            $outbox->queuedCreate('notes', 'busy', 'team-1');
+        }
 
-    $started = hrtime(true);
-    foreach (range(1, 200) as $ignored) {
-        $outbox->queuedCreate('notes', 'busy');
-    }
+        return (hrtime(true) - $started) / 1e6;
+    };
 
-    expect((hrtime(true) - $started) / 1e6)->toBeLessThan(200.0);
+    // The cost of a lookup must not grow with the queue: four times the queue,
+    // not four times the time.
+    $small = $timed(1000);
+    $large = $timed(4000);
+
+    expect($large)->toBeLessThan(max($small * 2.5, 5.0));
 });
+
+/**
+ * A handle names one record on this device. The same handle for records in two
+ * spaces made a reference - which carries no space - point at either, and let a
+ * refusal in one space hold back or release the other's writes.
+ */
+it('refuses a create whose handle this device already uses in another space', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-a', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'a')], 0);
+
+    expect(fn () => $outbox->queue(new EntityKey('team-b', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'b')], 0))
+        ->toThrow(InvalidRequest::class, 'another space');
+
+    // In its own space it may be created again - after a refusal, say.
+    $outbox->queue(new EntityKey('team-a', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'again')], 0);
+    expect($outbox->pending())->toBe(2);
+})->with(outboxStores());
 
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));

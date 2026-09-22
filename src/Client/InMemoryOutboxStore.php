@@ -81,6 +81,19 @@ class InMemoryOutboxStore implements OutboxStore
         return null;
     }
 
+    public function handleSpaces(string $entityType, string $handle): array
+    {
+        $spaces = array_keys($this->handles[$entityType][$handle] ?? []);
+        $creates = array_merge($this->queue, array_map(fn (array $entry): Mutation => $entry['mutation'], $this->abandoned));
+        foreach ($creates as $mutation) {
+            if ($mutation->kind === MutationKind::Create && $mutation->entity->type === $entityType && $mutation->entity->id === $handle) {
+                $spaces[] = $mutation->entity->space;
+            }
+        }
+
+        return array_values(array_unique(array_map('strval', $spaces)));
+    }
+
     public function recordName(EntityKey $handle, string $name): void
     {
         $this->names[$handle->key()] = new EntityKey($handle->space, $handle->type, $name);
@@ -131,7 +144,7 @@ class InMemoryOutboxStore implements OutboxStore
 
     public function namedAs(string $entityType, string $handle): ?string
     {
-        $names = array_unique(array_filter($this->handles[$entityType][$handle] ?? [], fn (string $name): bool => $name !== $handle));
+        $names = array_unique($this->handles[$entityType][$handle] ?? []);
 
         return count($names) === 1 ? reset($names) : null;
     }
@@ -251,7 +264,11 @@ class InMemoryOutboxStore implements OutboxStore
 
     public function abandoned(): array
     {
-        return array_values(array_filter($this->abandoned, fn (array $entry): bool => ! isset($this->dismissed[$entry['mutation']->id])));
+        $reported = array_values(array_filter($this->abandoned, fn (array $entry): bool => ! isset($this->dismissed[$entry['mutation']->id])));
+        // In queue order, as the durable store lists them.
+        usort($reported, fn (array $a, array $b): int => ($this->positions[$a['mutation']->id] ?? 0) <=> ($this->positions[$b['mutation']->id] ?? 0));
+
+        return $reported;
     }
 
     public function setReason(string $mutationId, string $reason): void

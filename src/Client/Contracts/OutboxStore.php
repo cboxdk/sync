@@ -107,8 +107,7 @@ interface OutboxStore
      * The name a handle of this type became, whatever space it was queued in -
      * for a reference, which may point into another scope. Null when two
      * spaces gave the same handle different names: guessing between them
-     * would point a write at another tenant's record. A handle a record kept
-     * as its own id is not a name here: nothing needs rewriting to it.
+     * would point a write at another tenant's record.
      */
     public function namedAs(string $entityType, string $handle): ?string;
 
@@ -183,6 +182,15 @@ interface OutboxStore
 
     /** A queued create for this record, wherever it sits in the queue - in one space when $space is given - or null. */
     public function createFor(string $entityType, string $entityId, ?string $space = null): ?Mutation;
+
+    /**
+     * The spaces in which this device already uses this handle for a record
+     * of this type: a create queued, abandoned or dismissed there, or a name
+     * recorded for it there.
+     *
+     * @return list<string>
+     */
+    public function handleSpaces(string $entityType, string $handle): array;
 
     /**
      * Remember what a handle is called without touching the queue - for a

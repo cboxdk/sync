@@ -171,8 +171,8 @@ class PdoOutboxStore implements OutboxStore
 
     public function replace(Mutation $mutation): void
     {
-        $this->run('UPDATE sync_outbox SET payload = ? WHERE mutation_id = ? AND abandoned_reason IS NULL', [
-            Payload::encode($mutation), $mutation->id,
+        $this->run('UPDATE sync_outbox SET payload = ?, kind = ? WHERE mutation_id = ? AND abandoned_reason IS NULL', [
+            Payload::encode($mutation), $mutation->kind->value, $mutation->id,
         ]);
     }
 
@@ -233,7 +233,7 @@ class PdoOutboxStore implements OutboxStore
     public function namedAs(string $entityType, string $handle): ?string
     {
         $names = [];
-        foreach ($this->rows('SELECT space, name FROM sync_outbox_names WHERE entity_type = ? AND handle = ? AND name <> handle', [$entityType, $handle]) as [, $name]) {
+        foreach ($this->rows('SELECT space, name FROM sync_outbox_names WHERE entity_type = ? AND handle = ?', [$entityType, $handle]) as [, $name]) {
             $names[] = $name;
         }
         $names = array_values(array_unique($names));
@@ -251,17 +251,46 @@ class PdoOutboxStore implements OutboxStore
 
     public function createFor(string $entityType, string $entityId, ?string $space = null): ?Mutation
     {
-        // By index on the kind column: a scan decoding every queued write of
-        // the record, on every write sent, made a long drain quadratic.
-        $sql = "SELECT payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND kind = 'create' AND abandoned_reason IS NULL";
+        // The record's rows only, by index, and the earliest create picked
+        // here: an ORDER BY led SQLite and PostgreSQL to walk the whole queue
+        // in queue order instead, which made a long drain quadratic. A row an
+        // earlier release queued has no kind yet, and is judged by its payload.
+        $sql = "SELECT queued_at, mutation_id, payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND (kind = 'create' OR kind IS NULL) AND abandoned_reason IS NULL";
         $bindings = [$entityType, $entityId];
         if ($space !== null) {
             $sql .= ' AND space = ?';
             $bindings[] = $space;
         }
-        $payload = $this->scalar($sql.' ORDER BY queued_at, mutation_id LIMIT 1', $bindings);
+        $statement = $this->pdo->prepare($sql);
+        $statement->execute($bindings);
+        $first = null;
+        foreach ($statement->fetchAll(\PDO::FETCH_NUM) as $row) {
+            if (! is_array($row) || ! is_numeric($row[0] ?? null) || ! is_string($row[1] ?? null) || ! is_string($row[2] ?? null)) {
+                continue;
+            }
+            $mutation = Payload::decode($row[2], Mutation::class);
+            $position = [(int) $row[0], $row[1]];
+            if ($mutation->kind === MutationKind::Create && ($first === null || $position < $first[0])) {
+                $first = [$position, $mutation];
+            }
+        }
 
-        return $payload === null ? null : Payload::decode($payload, Mutation::class);
+        return $first[1] ?? null;
+    }
+
+    public function handleSpaces(string $entityType, string $handle): array
+    {
+        $spaces = [];
+        foreach ($this->rows('SELECT space, name FROM sync_outbox_names WHERE entity_type = ? AND handle = ?', [$entityType, $handle]) as [$space]) {
+            $spaces[] = $space;
+        }
+        foreach ($this->rows("SELECT space, payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND (kind = 'create' OR kind IS NULL)", [$entityType, $handle]) as [$space, $payload]) {
+            if (Payload::decode($payload, Mutation::class)->kind === MutationKind::Create) {
+                $spaces[] = $space;
+            }
+        }
+
+        return array_values(array_unique($spaces));
     }
 
     public function recordName(EntityKey $handle, string $name): void
@@ -291,7 +320,7 @@ class PdoOutboxStore implements OutboxStore
 
     public function markSent(Mutation $numbered): void
     {
-        $this->run('UPDATE sync_outbox SET attempted = 1, numbered = 1, payload = ? WHERE mutation_id = ?', [Payload::encode($numbered), $numbered->id]);
+        $this->run('UPDATE sync_outbox SET attempted = 1, numbered = 1, payload = ?, kind = ? WHERE mutation_id = ?', [Payload::encode($numbered), $numbered->kind->value, $numbered->id]);
     }
 
     public function unmarkSent(string $mutationId): void

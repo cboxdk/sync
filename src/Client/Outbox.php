@@ -100,6 +100,16 @@ class Outbox
             $resolution,
         );
         Identifier::checkMutation($mutation);
+        if ($kind === MutationKind::Create) {
+            $elsewhere = array_values(array_diff($this->store->handleSpaces($entity->type, $entity->id), [$entity->space]));
+            if ($elsewhere !== []) {
+                // A handle names one record on this device. Used for a record
+                // in another space too, a reference to it - which carries no
+                // space - could be pointed at either, and a refusal of one
+                // could hold back, or release, the other's writes.
+                throw new InvalidRequest(sprintf('Handle %s is already used for a %s record in another space on this device; give each record its own handle - a UUID is simplest.', $entity->id, $entity->type));
+            }
+        }
         $this->store->append($mutation);
         if ($kind === MutationKind::Create) {
             // A new create for a record whose earlier one was dismissed: the
