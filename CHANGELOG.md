@@ -20,6 +20,7 @@
 - **Receipts grew without bound.** `prune()` drops the receipts written in the commits it removes. A replay older than the horizon is answered as a gap and applies nothing.
 - Identifiers must be valid UTF-8 - MySQL and PostgreSQL refused anything else with a driver error that SQLite stored.
 - A write handed out for sending is never rewritten by a later rename, since it may already be on the server. Writes scoped by a record created offline move to its name (`scopedBy`), and `requeue()` maps an abandoned write through every name given since. `resetAcknowledged()` is one atomic compare-and-set.
+- **On MySQL, concurrent writers to one space mostly failed** with a duplicate commit key when the engine ran inside a host transaction that had already read something: MySQL fixes a transaction's snapshot at its first read, which came before the space lock. Every ledger read is a locking read on MySQL now, so it sees the latest committed state.
 - A truncated deflate payload is refused instead of decoding to a prefix, and a write that would store a row larger than the reader accepts fails instead of producing a commit nobody can pull.
 - An atomic proposal that preserves a conflict is validated whole, as it would be chosen.
 - **The PDO outbox could not be installed on MySQL at all** (`CREATE INDEX IF NOT EXISTS`), and client schemas created by earlier releases kept `utf8mb4_bin`. Both are fixed, and the outbox suite now runs on MySQL and PostgreSQL too.

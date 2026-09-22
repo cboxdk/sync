@@ -216,9 +216,25 @@ class PdoLedger implements Ledger
         return $groups;
     }
 
-    /** @param list<string|int|null> $bindings */
+    /**
+     * Every read inside the ledger sees the latest committed state.
+     *
+     * On MySQL a transaction reads from a snapshot fixed at its FIRST read -
+     * and when the engine's transaction is a savepoint inside the host's, that
+     * read can come before the space lock was taken: a model save reading its
+     * own row, say. The ledger then numbered its commit from before another
+     * writer committed, and concurrent writers to one tenant mostly failed on
+     * the commits primary key. A locking read always sees the latest version.
+     * PostgreSQL's default isolation reads the latest committed row per
+     * statement already; SQLite has one writer.
+     *
+     * @param  list<string|int|null>  $bindings
+     */
     private function scalar(string $sql, array $bindings): ?string
     {
+        if ($this->schema->driver === PdoSchema::MYSQL && str_starts_with($sql, 'SELECT')) {
+            $sql .= ' FOR SHARE';
+        }
         $statement = $this->connection->prepare($sql);
         $statement->execute($bindings);
         $value = $statement->fetchColumn();
