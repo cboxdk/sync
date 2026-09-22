@@ -235,6 +235,15 @@ class InMemoryOutboxStore implements OutboxStore
                 $this->queue[$index] = $mutation->withEntity(new EntityKey($to, $entityType, $mutation->entity->id));
             }
         }
+        // Abandoned and dismissed writes too: they are records of the same
+        // scope, and left under the old label a handle would name records in
+        // two spaces.
+        foreach ($this->abandoned as $index => $entry) {
+            $mutation = $entry['mutation'];
+            if ($mutation->entity->type === $entityType && $mutation->entity->space === $from) {
+                $this->abandoned[$index]['mutation'] = $mutation->withEntity(new EntityKey($to, $entityType, $mutation->entity->id));
+            }
+        }
     }
 
     public function nameOf(EntityKey $handle): ?EntityKey

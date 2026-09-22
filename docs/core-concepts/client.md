@@ -84,7 +84,7 @@ Getting any of those wrong is silent data loss or a permanently wedged
 queue, which is why they are implemented once here rather than in each
 application. Abandoned mutations are kept with their reason and must be
 surfaced: nothing else will tell the user that a write is never going to land.
-A handle names one record on the device: queueing a create whose handle is already used for a record in another space is refused, since a reference to it carries no space. Use UUIDs.
+A handle names one record on the device: queueing a create whose handle is already used for a record in another space is refused, since a reference to it carries no space. It must never equal a server id either - a reference to that server record would be rewritten to the handle's name. Use UUIDs.
 
 A create that may have landed and is dismissed takes the writes that need it
 along as `parent_unknown`. Find the record on the server, tell the outbox what it

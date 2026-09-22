@@ -979,6 +979,47 @@ it('refuses a create whose handle this device already uses in another space', fu
     expect($outbox->pending())->toBe(2);
 })->with(outboxStores());
 
+/**
+ * A scope's rename moved only the queued writes, so a refused create stayed
+ * under the old label and its handle named records in two spaces: retrying it
+ * sent a second create for a record already being created again.
+ */
+it('moves abandoned writes along when their scope is named', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $refused = $outbox->queue(new EntityKey('P', 'tasks', 'T'), MutationKind::Create, [Op::set('t', 'bad')], 0);
+    $outbox->refused($outbox->head('tasks') ?? throw new LogicException('expected T'), 'validation_failed');
+    $outbox->queue(new EntityKey('P', 'tasks', 'T'), MutationKind::Create, [Op::set('t', 'good')], 0);
+
+    $outbox->relabel('tasks', 'P', '42');
+
+    expect($store->handleSpaces('tasks', 'T'))->toBe(['42'])
+        ->and($outbox->abandoned()[0]['mutation']->entity->space)->toBe('42')
+        ->and(fn () => $outbox->requeue($refused->id))->toThrow(InvalidRequest::class, 'queued again');
+})->with(outboxStores());
+
+/** One record with many queued edits: its create was looked for among all of them on every write sent. */
+it('finds a record\'s create without reading the record\'s own edits', function () {
+    $timed = function (int $edits): float {
+        $store = new PdoOutboxStore(new PDO('sqlite::memory:'));
+        $store->migrate();
+        $outbox = outboxFor($store);
+        foreach (range(1, $edits) as $n) {
+            $outbox->queue(note('busy'), MutationKind::Update, [Op::set('t', (string) $n)], 1);
+        }
+        $started = hrtime(true);
+        foreach (range(1, 300) as $ignored) {
+            $outbox->queuedCreate('notes', 'busy', 'team-1');
+        }
+
+        return (hrtime(true) - $started) / 1e6;
+    };
+
+    $small = $timed(1000);
+    $large = $timed(4000);
+
+    expect($large)->toBeLessThan(max($small * 2.5, 5.0));
+});
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);

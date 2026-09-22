@@ -101,6 +101,9 @@ class PdoOutboxStore implements OutboxStore
         }
         $this->index('sync_outbox_entity', 'sync_outbox', 'space, entity_type, entity_id');
         $this->index('sync_outbox_create', 'sync_outbox', 'entity_type, entity_id, kind, queued_at');
+        // inFlight(): the write a stream is waiting on, found without sorting
+        // the stream's whole backlog on every hand-out.
+        $this->index('sync_outbox_in_flight', 'sync_outbox', 'replica_id, space, attempted, queued_at, mutation_id');
         $this->index('sync_outbox_record', 'sync_outbox', 'entity_type, entity_id');
         // What each handle this device created under became. Written in the
         // same transaction as the acknowledgement, so a crash cannot leave the
@@ -118,6 +121,8 @@ class PdoOutboxStore implements OutboxStore
             assigned BIGINT NOT NULL,
             PRIMARY KEY (replica_id, space)
         )");
+        // namedAs() and handleSpaces(): by type and handle, in whatever space.
+        $this->index('sync_outbox_names_handle', 'sync_outbox_names', 'entity_type, handle');
         foreach (['sync_outbox', 'sync_outbox_names', 'sync_outbox_sequences'] as $table) {
             MysqlCollation::repair($this->pdo, $table);
         }
@@ -251,11 +256,11 @@ class PdoOutboxStore implements OutboxStore
 
     public function createFor(string $entityType, string $entityId, ?string $space = null): ?Mutation
     {
-        // The record's rows only, by index, and the earliest create picked
-        // here: an ORDER BY led SQLite and PostgreSQL to walk the whole queue
-        // in queue order instead, which made a long drain quadratic. A row an
-        // earlier release queued has no kind yet, and is judged by its payload.
-        $sql = "SELECT queued_at, mutation_id, payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND (kind = 'create' OR kind IS NULL) AND abandoned_reason IS NULL";
+        // The record's creates only, by index, and the earliest picked here: an
+        // ORDER BY led SQLite and PostgreSQL to walk the whole queue in queue
+        // order instead, which made a long drain quadratic. migrate() gives
+        // rows an earlier release queued their kind.
+        $sql = "SELECT queued_at, mutation_id, payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND kind = 'create' AND abandoned_reason IS NULL";
         $bindings = [$entityType, $entityId];
         if ($space !== null) {
             $sql .= ' AND space = ?';
@@ -284,10 +289,8 @@ class PdoOutboxStore implements OutboxStore
         foreach ($this->rows('SELECT space, name FROM sync_outbox_names WHERE entity_type = ? AND handle = ?', [$entityType, $handle]) as [$space]) {
             $spaces[] = $space;
         }
-        foreach ($this->rows("SELECT space, payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND (kind = 'create' OR kind IS NULL)", [$entityType, $handle]) as [$space, $payload]) {
-            if (Payload::decode($payload, Mutation::class)->kind === MutationKind::Create) {
-                $spaces[] = $space;
-            }
+        foreach ($this->rows("SELECT space, space FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND kind = 'create'", [$entityType, $handle]) as [$space]) {
+            $spaces[] = $space;
         }
 
         return array_values(array_unique($spaces));
@@ -381,7 +384,10 @@ class PdoOutboxStore implements OutboxStore
 
     public function relabel(string $entityType, string $from, string $to): void
     {
-        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE entity_type = ? AND space = ? AND abandoned_reason IS NULL', [$entityType, $from]) as [$id, $payload]) {
+        // Abandoned and dismissed writes too: they are records of the same
+        // scope, and left under the old label a handle would name records in
+        // two spaces.
+        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE entity_type = ? AND space = ?', [$entityType, $from]) as [$id, $payload]) {
             $mutation = Payload::decode($payload, Mutation::class);
             $this->run('UPDATE sync_outbox SET space = ?, payload = ? WHERE mutation_id = ?', [
                 $to, Payload::encode($mutation->withEntity(new EntityKey($to, $entityType, $mutation->entity->id))), $id,
