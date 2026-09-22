@@ -73,9 +73,7 @@ class PdoStore implements Store
         try {
             $this->begin();
             try {
-                $this->lockSpace($space);
-                $result = $callback($this->ledger($space));
-                $this->beforeCommit($space);
+                $result = $this->underLock($space, $callback);
                 $this->commit();
 
                 return $result;
@@ -124,7 +122,7 @@ class PdoStore implements Store
     }
 
     /** A deadlock or a lock wait that timed out, on any driver. */
-    private static function isContention(\PDOException $failure): bool
+    protected static function isContention(\PDOException $failure): bool
     {
         $state = (string) $failure->getCode();
         $driverCode = $failure->errorInfo[1] ?? null;
@@ -150,17 +148,40 @@ class PdoStore implements Store
     /** Adapter hook; failure here rolls back even results and acknowledgements. */
     protected function beforeCommit(string $space): void {}
 
-    /** Outside the transaction, so a lost race is a harmless duplicate rather than a poisoned transaction. */
-    private function ensureSpace(string $space): void
+    /**
+     * Create the space's row if it is not there, as one statement that cannot
+     * fail on a race. Catching the duplicate instead was harmless on its own
+     * connection and fatal inside a host's transaction on PostgreSQL, which
+     * aborts the whole transaction on any error - so the first two writes to a
+     * new tenant at the same moment failed.
+     */
+    protected function ensureSpace(string $space): void
     {
         if ($this->scalar('SELECT 1 FROM sync_spaces WHERE space = ?', [$space]) !== null) {
             return;
         }
-        try {
-            $this->run('INSERT INTO sync_spaces (space, commit_sequence, retained_from) VALUES (?, 0, 1)', [$space]);
-        } catch (\PDOException) {
-            // Another connection created it first.
-        }
+        $this->run(match ($this->schema->driver) {
+            PdoSchema::MYSQL => 'INSERT IGNORE INTO sync_spaces (space, commit_sequence, retained_from) VALUES (?, 0, 1)',
+            default => 'INSERT INTO sync_spaces (space, commit_sequence, retained_from) VALUES (?, 0, 1) ON CONFLICT (space) DO NOTHING',
+        }, [$space]);
+    }
+
+    /**
+     * The part of a transaction that runs under the space lock. Separate so an
+     * adapter that lets its framework own the transaction can run just this.
+     *
+     * @template TResult
+     *
+     * @param  \Closure(Ledger): TResult  $callback
+     * @return TResult
+     */
+    protected function underLock(string $space, \Closure $callback): mixed
+    {
+        $this->lockSpace($space);
+        $result = $callback($this->ledger($space));
+        $this->beforeCommit($space);
+
+        return $result;
     }
 
     private function lockSpace(string $space): void

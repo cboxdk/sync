@@ -37,9 +37,12 @@ use Cbox\Sync\Resolvers\PreserveConflict;
 use Cbox\Sync\Support\UuidV7Generator;
 use Cbox\Sync\Validation\AcceptAll;
 use Cbox\Sync\ValueObjects\CommitSequence;
+use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\FieldVersion;
 use Cbox\Sync\ValueObjects\Identifier;
+use Cbox\Sync\ValueObjects\MutationSequence;
 use Cbox\Sync\ValueObjects\RecordVersion;
+use Cbox\Sync\ValueObjects\Replica;
 
 class Engine
 {
@@ -56,125 +59,77 @@ class Engine
         Identifier::checkMutation($mutation);
         $committed = null;
         $result = $this->store->transaction($mutation->entity->space, function (Ledger $ledger) use ($mutation, $context, $onConflict, &$committed): MutationResult {
-            $receipt = $ledger->receipt($mutation->id);
-            if ($receipt !== null) {
-                if ($receipt->mutation->fingerprint() !== $mutation->fingerprint() || $receipt->provenance->actorId !== $context->actorId || $receipt->provenance->integrationId !== $context->integrationId) {
-                    throw new ProtocolException('Mutation identity reused with different content');
-                }
-
-                return $receipt->result;
-            }
-            $ack = $ledger->acknowledged($mutation->replica);
-            if ($mutation->sequence->value <= $ack && $mutation->sequence->value <= $ledger->prunedThrough($mutation->replica)) {
-                // A position whose receipt was pruned: this could be a replay
-                // of a write that was applied, and renumbering it would apply
-                // it twice. So this mutation is final, and the writer takes
-                // THIS position as acknowledged (Outbox::settledUnknown) - not
-                // the stream's position, which would renumber the replays
-                // queued behind it above the pruned range.
-                return new MutationResult(MutationStatus::ReceiptPruned, reason: 'receipt_pruned', acknowledgedSequence: $ack);
-            }
-            if ($mutation->sequence->value <= $ack) {
-                // A number this stream already used, under an identity with no
-                // receipt: the writer is BEHIND - its state restored from an
-                // older backup. Answered like a gap, with where the stream really
-                // is, so it renumbers upward and goes on. Refusing it as a
-                // protocol violation abandoned every write after the restore,
-                // permanently, one by one.
-                return new MutationResult(MutationStatus::MutationGap, reason: 'sequence_behind', acknowledgedSequence: $ack);
-            }
-            if ($mutation->sequence->value !== $ack + 1) {
-                return new MutationResult(MutationStatus::MutationGap, reason: 'expected_sequence_'.($ack + 1), acknowledgedSequence: $ack);
-            }
-            $record = $ledger->record($mutation->entity);
-            $origin = Provenance::fromMutation($mutation, $context);
-            $actualVersion = $record->version ?? new RecordVersion;
-            if ($mutation->expectedVersion !== null && $mutation->expectedVersion->value !== $actualVersion->value) {
-                $outcome = new MutationResult(
-                    MutationStatus::PreconditionFailed, $actualVersion,
-                    reason: 'revision_mismatch',
-                    preconditionFailure: new PreconditionFailure($mutation->expectedVersion, $actualVersion),
-                );
-            } else {
-                if ($mutation->baseVersion->value > $actualVersion->value) {
-                    throw new InvalidRequest('Future base version');
-                }
-                $knowledge = $this->dependency($ledger, $mutation);
-                $ledger->beginDraft();
-                $outcome = $this->apply($ledger, $mutation, $record, $knowledge, $context, $onConflict);
-                if ($outcome->status === MutationStatus::PullRequired) {
-                    // Like a gap: no receipt, no acknowledgement, no commit.
-                    // The writer is expected to send this same mutation again,
-                    // rebased, and a stored receipt would turn that into a
-                    // reused identity.
-                    $ledger->rollbackDraft();
-
-                    return new MutationResult(MutationStatus::PullRequired, $outcome->recordVersion, reason: $outcome->reason,
-                        decisions: $outcome->decisions, acknowledgedSequence: $ack, conflicts: $outcome->conflicts);
-                }
-                $proposed = $ledger->record($mutation->entity);
-                // Whatever is about to be committed is validated, rather than a
-                // list of statuses someone has to remember to extend. Conflict
-                // was missing from that list: a preserved candidate is stored
-                // state, and it was reaching the database without the host's
-                // validator - and so without the authorization re-check that
-                // decorates it - on the one path this package exists for.
-                //
-                // Rejected is the only outcome here that never reaches storage,
-                // so it is the only one worth skipping. Keeping the condition
-                // the exact inverse of the rollback below is what stops the two
-                // drifting apart again.
-                if ($proposed !== null && $outcome->status !== MutationStatus::Rejected) {
-                    $validation = $this->validator->validate(new ValidationContext($record, $proposed, $mutation, $origin));
-                    // A preserved candidate is not in the record yet, so the
-                    // check above never saw its value. It is a value someone
-                    // may choose later, and one that could never be valid has
-                    // no business waiting in a group for them to choose it.
-                    $chosen = $this->asIfChosen($proposed, $mutation, $outcome);
-                    if ($validation->isValid() && $chosen !== null) {
-                        $validation = $this->validator->validate(new ValidationContext($record, $chosen, $mutation, $origin));
-                    }
-                    if (! $validation->isValid()) {
-                        $outcome = new MutationResult(MutationStatus::ValidationFailed, $actualVersion,
-                            reason: 'invalid_entity_state', decisions: $outcome->decisions,
-                            validation: $validation, conflicts: $outcome->conflicts);
-                    }
-                }
-                if (in_array($outcome->status, [MutationStatus::Rejected, MutationStatus::ValidationFailed], true)) {
-                    $ledger->rollbackDraft();
-                } else {
-                    $ledger->commitDraft();
-                }
-            }
-            $sequence = new CommitSequence($ledger->watermark()->value + 1);
-            $result = new MutationResult($outcome->status, $outcome->recordVersion, $sequence, $outcome->reason, $outcome->decisions, $outcome->acceptedVersions, $outcome->conflictGroupIds, $mutation->sequence->value, $outcome->preconditionFailure, $outcome->validation, $outcome->conflicts);
-            $receipt = new Receipt($mutation, $result, $origin);
-            $ledger->putReceipt($receipt);
-            $ledger->acknowledge($mutation->replica, $mutation->sequence->value);
-            $changes = [];
-            if ($ledger->recordChanged($mutation->entity)) {
-                // A record reported changed is in the ledger; a Change of kind
-                // Record carrying no record would be a feed entry a reader
-                // cannot apply.
-                $after = $ledger->record($mutation->entity) ?? throw new \LogicException('A changed record is missing from the ledger');
-                $changes[] = new Change(count($changes), $after->deleted ? ChangeKind::Deleted : ChangeKind::Record, record: $after, previousRecord: $record, provenance: $origin);
-            }
-            foreach ($ledger->touchedGroups() as $group) {
-                $changes[] = new Change(count($changes), ChangeKind::Conflict, group: $group, provenance: $origin);
-            }
-            $changes[] = new Change(count($changes), ChangeKind::Mutation, receipt: $receipt, provenance: $origin);
-            $ledger->appendCommit($sequence, $changes);
-            $committed = $sequence;
-
-            return $result;
+            return $this->within($ledger, $mutation, $context, $onConflict, $committed);
         });
+        $this->announce($mutation->entity->space, $committed);
 
+        return $result;
+    }
+
+    /**
+     * A write the host makes itself - a model save, an admin screen - with
+     * everything that depends on the current state decided INSIDE the space
+     * lock: whether it is a create or an update, the version it is based on,
+     * and the stream position it takes.
+     *
+     * Deciding those before the lock raced any other writer to the same space:
+     * two saves read the same next position and one was refused, and under
+     * MySQL's REPEATABLE READ a host transaction's snapshot kept every retry
+     * reading the same stale number.
+     *
+     * @param  list<FieldOperation>  $operations
+     * @param  list<int>|null  $acceptVersions  versions the caller accepts the record at - If-Match - or null for none
+     * @param  int|null  $claimedBase  the version the caller says it was looking at, for field-level checks
+     * @return MutationResult|null null for a delete of a record the log never held
+     */
+    public function recordTrusted(EntityKey $entity, Replica $replica, array $operations, bool $deleting, AdapterContext $context = new AdapterContext, ?array $acceptVersions = null, ?int $claimedBase = null, OnConflict $onConflict = OnConflict::Pull): ?MutationResult
+    {
+        $committed = null;
+        $mutationSpace = $entity->space;
+        $result = $this->store->transaction($mutationSpace, function (Ledger $ledger) use ($entity, $replica, $operations, $deleting, $context, $acceptVersions, $claimedBase, $onConflict, &$committed): ?MutationResult {
+            $current = $ledger->record($entity);
+            if ($deleting && ($current === null || $current->deleted)) {
+                return null;
+            }
+            $kind = match (true) {
+                $deleting => MutationKind::Delete,
+                $current === null => MutationKind::Create,
+                default => MutationKind::Update,
+            };
+            $stored = $current?->version->value ?? 0;
+            $expected = null;
+            if ($acceptVersions !== null && $kind !== MutationKind::Create) {
+                $expected = in_array($stored, $acceptVersions, true) ? $stored : ($acceptVersions[0] ?? 0);
+            }
+            $base = $kind === MutationKind::Create ? 0 : min($expected ?? $claimedBase ?? $stored, $stored);
+
+            $mutation = new Mutation(
+                'trusted-'.$this->ids->generate(),
+                $entity,
+                $replica,
+                new MutationSequence($ledger->acknowledged($replica) + 1),
+                $kind,
+                new RecordVersion($base),
+                $kind === MutationKind::Delete ? [] : $operations,
+                expectedVersion: $expected === null ? null : new RecordVersion($expected),
+            );
+            Identifier::checkMutation($mutation);
+
+            return $this->within($ledger, $mutation, $context, $onConflict, $committed);
+        });
+        $this->announce($mutationSpace, $committed);
+
+        return $result;
+    }
+
+    private function announce(string $space, ?CommitSequence $committed): void
+    {
         // After the transaction, never inside it: a rollback must not announce a
         // write that did not happen. A replay, a mutation gap or a refusal
         // appends no commit and so signals nothing.
         if ($committed !== null) {
             try {
-                $this->observer->committed($mutation->entity->space, $committed);
+                $this->observer->committed($space, $committed);
             } catch (\Throwable) {
                 // A notification cannot change the outcome of a write that has
                 // already happened. Letting it through would fail the caller's
@@ -188,6 +143,119 @@ class Engine
                 // the half that has a logger.
             }
         }
+    }
+
+    private function within(Ledger $ledger, Mutation $mutation, AdapterContext $context, OnConflict $onConflict, ?CommitSequence &$committed): MutationResult
+    {
+        $receipt = $ledger->receipt($mutation->id);
+        if ($receipt !== null) {
+            if ($receipt->mutation->fingerprint() !== $mutation->fingerprint() || $receipt->provenance->actorId !== $context->actorId || $receipt->provenance->integrationId !== $context->integrationId) {
+                throw new ProtocolException('Mutation identity reused with different content');
+            }
+
+            return $receipt->result;
+        }
+        $ack = $ledger->acknowledged($mutation->replica);
+        if ($mutation->sequence->value <= $ack && $mutation->sequence->value <= $ledger->prunedThrough($mutation->replica)) {
+            // A position whose receipt was pruned: this could be a replay
+            // of a write that was applied, and renumbering it would apply
+            // it twice. So this mutation is final, and the writer takes
+            // THIS position as acknowledged (Outbox::settledUnknown) - not
+            // the stream's position, which would renumber the replays
+            // queued behind it above the pruned range.
+            return new MutationResult(MutationStatus::ReceiptPruned, reason: 'receipt_pruned', acknowledgedSequence: $ack);
+        }
+        if ($mutation->sequence->value <= $ack) {
+            // A number this stream already used, under an identity with no
+            // receipt: the writer is BEHIND - its state restored from an
+            // older backup. Answered like a gap, with where the stream really
+            // is, so it renumbers upward and goes on. Refusing it as a
+            // protocol violation abandoned every write after the restore,
+            // permanently, one by one.
+            return new MutationResult(MutationStatus::MutationGap, reason: 'sequence_behind', acknowledgedSequence: $ack);
+        }
+        if ($mutation->sequence->value !== $ack + 1) {
+            return new MutationResult(MutationStatus::MutationGap, reason: 'expected_sequence_'.($ack + 1), acknowledgedSequence: $ack);
+        }
+        $record = $ledger->record($mutation->entity);
+        $origin = Provenance::fromMutation($mutation, $context);
+        $actualVersion = $record->version ?? new RecordVersion;
+        if ($mutation->expectedVersion !== null && $mutation->expectedVersion->value !== $actualVersion->value) {
+            $outcome = new MutationResult(
+                MutationStatus::PreconditionFailed, $actualVersion,
+                reason: 'revision_mismatch',
+                preconditionFailure: new PreconditionFailure($mutation->expectedVersion, $actualVersion),
+            );
+        } else {
+            if ($mutation->baseVersion->value > $actualVersion->value) {
+                throw new InvalidRequest('Future base version');
+            }
+            $knowledge = $this->dependency($ledger, $mutation);
+            $ledger->beginDraft();
+            $outcome = $this->apply($ledger, $mutation, $record, $knowledge, $context, $onConflict);
+            if ($outcome->status === MutationStatus::PullRequired) {
+                // Like a gap: no receipt, no acknowledgement, no commit.
+                // The writer is expected to send this same mutation again,
+                // rebased, and a stored receipt would turn that into a
+                // reused identity.
+                $ledger->rollbackDraft();
+
+                return new MutationResult(MutationStatus::PullRequired, $outcome->recordVersion, reason: $outcome->reason,
+                    decisions: $outcome->decisions, acknowledgedSequence: $ack, conflicts: $outcome->conflicts);
+            }
+            $proposed = $ledger->record($mutation->entity);
+            // Whatever is about to be committed is validated, rather than a
+            // list of statuses someone has to remember to extend. Conflict
+            // was missing from that list: a preserved candidate is stored
+            // state, and it was reaching the database without the host's
+            // validator - and so without the authorization re-check that
+            // decorates it - on the one path this package exists for.
+            //
+            // Rejected is the only outcome here that never reaches storage,
+            // so it is the only one worth skipping. Keeping the condition
+            // the exact inverse of the rollback below is what stops the two
+            // drifting apart again.
+            if ($proposed !== null && $outcome->status !== MutationStatus::Rejected) {
+                $validation = $this->validator->validate(new ValidationContext($record, $proposed, $mutation, $origin));
+                // A preserved candidate is not in the record yet, so the
+                // check above never saw its value. It is a value someone
+                // may choose later, and one that could never be valid has
+                // no business waiting in a group for them to choose it.
+                $chosen = $this->asIfChosen($proposed, $mutation, $outcome);
+                if ($validation->isValid() && $chosen !== null) {
+                    $validation = $this->validator->validate(new ValidationContext($record, $chosen, $mutation, $origin));
+                }
+                if (! $validation->isValid()) {
+                    $outcome = new MutationResult(MutationStatus::ValidationFailed, $actualVersion,
+                        reason: 'invalid_entity_state', decisions: $outcome->decisions,
+                        validation: $validation, conflicts: $outcome->conflicts);
+                }
+            }
+            if (in_array($outcome->status, [MutationStatus::Rejected, MutationStatus::ValidationFailed], true)) {
+                $ledger->rollbackDraft();
+            } else {
+                $ledger->commitDraft();
+            }
+        }
+        $sequence = new CommitSequence($ledger->watermark()->value + 1);
+        $result = new MutationResult($outcome->status, $outcome->recordVersion, $sequence, $outcome->reason, $outcome->decisions, $outcome->acceptedVersions, $outcome->conflictGroupIds, $mutation->sequence->value, $outcome->preconditionFailure, $outcome->validation, $outcome->conflicts);
+        $receipt = new Receipt($mutation, $result, $origin);
+        $ledger->putReceipt($receipt);
+        $ledger->acknowledge($mutation->replica, $mutation->sequence->value);
+        $changes = [];
+        if ($ledger->recordChanged($mutation->entity)) {
+            // A record reported changed is in the ledger; a Change of kind
+            // Record carrying no record would be a feed entry a reader
+            // cannot apply.
+            $after = $ledger->record($mutation->entity) ?? throw new \LogicException('A changed record is missing from the ledger');
+            $changes[] = new Change(count($changes), $after->deleted ? ChangeKind::Deleted : ChangeKind::Record, record: $after, previousRecord: $record, provenance: $origin);
+        }
+        foreach ($ledger->touchedGroups() as $group) {
+            $changes[] = new Change(count($changes), ChangeKind::Conflict, group: $group, provenance: $origin);
+        }
+        $changes[] = new Change(count($changes), ChangeKind::Mutation, receipt: $receipt, provenance: $origin);
+        $ledger->appendCommit($sequence, $changes);
+        $committed = $sequence;
 
         return $result;
     }

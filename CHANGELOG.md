@@ -8,7 +8,13 @@
 - **The outbox gives a device what it was missing:** `requeue()` and `dismiss()` for an abandoned write, `nameOf()` for what a created record was called, and a rewrite of the fields the application names as references when a created record is named, so a child created offline reaches the server pointing at its parent's real id.
 - `Contracts\OutboxStore` gains `replace()`, `resetAcknowledged()`, `nameOf()`, `dismiss()` and `queued()`, and `head()` takes a space.
 
+### Added
+
+- **`Engine::recordTrusted()`** for a host's own writes - a model save - deciding create or update, the base version and the stream position inside the space lock. Deciding them before the lock made concurrent saves race for a position.
+
 ### Fixed
+
+- The first writes to a new space no longer race: the space row is created with a statement that cannot fail on a duplicate, which on PostgreSQL used to abort the host's surrounding transaction.
 
 - **A device's numbering could disagree with the server's.** Each entity type and space a device writes to is now its own replica stream. The server numbers per replica per space and maps types and scopes to spaces by rules the device cannot see; one stream per (type, space) keeps both sides counting the same thing, where a single lost response used to make a write collide and be abandoned for good.
 - **A device out of step with the server after a restore could never push again.** A server restored from a backup answered every write with the same gap; `resumeAfter()` now sets the acknowledgement exactly, downward too, and only if the counter is still where that attempt numbered from. A device restored from a backup reused numbers the server held and had every write refused as a protocol violation; a new identity on a used number is now answered as a gap with reason `sequence_behind`, and the writer renumbers upward - except at or below the highest position of that stream whose receipt was actually pruned, where it could be a replay whose answer is gone. That is answered `receipt_pruned`: final for that one write, never renumbered and applied twice, but carrying where the stream is so the writer goes on with the next. Ordinary acknowledgements still only rise.
