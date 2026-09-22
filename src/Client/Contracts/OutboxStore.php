@@ -46,8 +46,7 @@ interface OutboxStore
      * the handle - a child holding its parent's id - is the application's, and
      * no store can know which fields are references, so the rename is reported
      * rather than hidden. It is also remembered, for nameOf().
-     */
-    /**
+     *
      * $creates: whether a queued create for $from moves too. Not after the
      * server named one: another create queued for the same handle is a record
      * of its own.
@@ -108,7 +107,8 @@ interface OutboxStore
      * The name a handle of this type became, whatever space it was queued in -
      * for a reference, which may point into another scope. Null when two
      * spaces gave the same handle different names: guessing between them
-     * would point a write at another tenant's record.
+     * would point a write at another tenant's record. A handle a record kept
+     * as its own id is not a name here: nothing needs rewriting to it.
      */
     public function namedAs(string $entityType, string $handle): ?string;
 
@@ -181,8 +181,15 @@ interface OutboxStore
     /** The oldest write still queued for this record, or null. */
     public function firstFor(string $entityType, string $entityId): ?Mutation;
 
-    /** A queued create for this record, wherever it sits in the queue, or null. */
-    public function createFor(string $entityType, string $entityId): ?Mutation;
+    /** A queued create for this record, wherever it sits in the queue - in one space when $space is given - or null. */
+    public function createFor(string $entityType, string $entityId, ?string $space = null): ?Mutation;
+
+    /**
+     * Remember what a handle is called without touching the queue - for a
+     * record the server accepted under the device's own id, where nothing
+     * queued needs renaming.
+     */
+    public function recordName(EntityKey $handle, string $name): void;
 
     /** A queued write by its identity, or null when it is no longer queued. */
     public function find(string $mutationId): ?Mutation;

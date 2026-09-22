@@ -36,7 +36,6 @@ class InMemoryOutboxStore implements OutboxStore
 
     public function append(Mutation $mutation): void
     {
-        $this->positions[$mutation->id] = count($this->positions) + 1;
         foreach ($this->queue as $queued) {
             if ($queued->id === $mutation->id) {
                 throw new InvalidRequest('Mutation identity is already queued: '.$mutation->id);
@@ -50,6 +49,7 @@ class InMemoryOutboxStore implements OutboxStore
                 throw new InvalidRequest('Mutation identity is already queued: '.$mutation->id);
             }
         }
+        $this->positions[$mutation->id] = count($this->positions) + 1;
         $this->queue[] = $mutation;
     }
 
@@ -69,15 +69,22 @@ class InMemoryOutboxStore implements OutboxStore
         }
     }
 
-    public function createFor(string $entityType, string $entityId): ?Mutation
+    public function createFor(string $entityType, string $entityId, ?string $space = null): ?Mutation
     {
         foreach ($this->queue as $mutation) {
-            if ($mutation->kind === MutationKind::Create && $mutation->entity->type === $entityType && $mutation->entity->id === $entityId) {
+            if ($mutation->kind === MutationKind::Create && $mutation->entity->type === $entityType && $mutation->entity->id === $entityId
+                && ($space === null || $mutation->entity->space === $space)) {
                 return $mutation;
             }
         }
 
         return null;
+    }
+
+    public function recordName(EntityKey $handle, string $name): void
+    {
+        $this->names[$handle->key()] = new EntityKey($handle->space, $handle->type, $name);
+        $this->handles[$handle->type][$handle->id][$handle->space] = $name;
     }
 
     public function replace(Mutation $mutation): void
@@ -124,7 +131,7 @@ class InMemoryOutboxStore implements OutboxStore
 
     public function namedAs(string $entityType, string $handle): ?string
     {
-        $names = array_unique($this->handles[$entityType][$handle] ?? []);
+        $names = array_unique(array_filter($this->handles[$entityType][$handle] ?? [], fn (string $name): bool => $name !== $handle));
 
         return count($names) === 1 ? reset($names) : null;
     }

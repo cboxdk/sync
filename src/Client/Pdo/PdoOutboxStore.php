@@ -70,6 +70,9 @@ class PdoOutboxStore implements OutboxStore
         if (! in_array('numbered', $columns, true)) {
             $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN numbered SMALLINT NOT NULL DEFAULT 0');
         }
+        if (! in_array('kind', $columns, true)) {
+            $this->pdo->exec("ALTER TABLE sync_outbox ADD COLUMN kind $name NULL");
+        }
         if (! in_array('dismissed', $columns, true)) {
             $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN dismissed SMALLINT NOT NULL DEFAULT 0');
         }
@@ -92,7 +95,12 @@ class PdoOutboxStore implements OutboxStore
         foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE entity_id IS NULL', []) as [$id, $payload]) {
             $this->run('UPDATE sync_outbox SET entity_id = ? WHERE mutation_id = ?', [Payload::decode($payload, Mutation::class)->entity->id, $id]);
         }
+        // Rows queued before the kind column get it now, once.
+        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE kind IS NULL', []) as [$id, $payload]) {
+            $this->run('UPDATE sync_outbox SET kind = ? WHERE mutation_id = ?', [Payload::decode($payload, Mutation::class)->kind->value, $id]);
+        }
         $this->index('sync_outbox_entity', 'sync_outbox', 'space, entity_type, entity_id');
+        $this->index('sync_outbox_create', 'sync_outbox', 'entity_type, entity_id, kind, queued_at');
         $this->index('sync_outbox_record', 'sync_outbox', 'entity_type, entity_id');
         // What each handle this device created under became. Written in the
         // same transaction as the acknowledgement, so a crash cannot leave the
@@ -120,8 +128,8 @@ class PdoOutboxStore implements OutboxStore
         $position = (int) ($this->scalar('SELECT COALESCE(MAX(queued_at), 0) FROM sync_outbox', []) ?? '0') + 1;
 
         try {
-            $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, entity_id, queued_at, payload, abandoned_reason, sends) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0)', [
-                $mutation->id, $mutation->replica->id, $mutation->entity->space, $mutation->entity->type, $mutation->entity->id, $position, Payload::encode($mutation),
+            $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, entity_id, kind, queued_at, payload, abandoned_reason, sends) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)', [
+                $mutation->id, $mutation->replica->id, $mutation->entity->space, $mutation->entity->type, $mutation->entity->id, $mutation->kind->value, $position, Payload::encode($mutation),
             ]);
         } catch (\PDOException $exception) {
             // An abandoned row keeps its id, so re-queuing under the same
@@ -225,7 +233,7 @@ class PdoOutboxStore implements OutboxStore
     public function namedAs(string $entityType, string $handle): ?string
     {
         $names = [];
-        foreach ($this->rows('SELECT space, name FROM sync_outbox_names WHERE entity_type = ? AND handle = ?', [$entityType, $handle]) as [, $name]) {
+        foreach ($this->rows('SELECT space, name FROM sync_outbox_names WHERE entity_type = ? AND handle = ? AND name <> handle', [$entityType, $handle]) as [, $name]) {
             $names[] = $name;
         }
         $names = array_values(array_unique($names));
@@ -241,16 +249,25 @@ class PdoOutboxStore implements OutboxStore
         return $payload === null ? null : Payload::decode($payload, Mutation::class);
     }
 
-    public function createFor(string $entityType, string $entityId): ?Mutation
+    public function createFor(string $entityType, string $entityId, ?string $space = null): ?Mutation
     {
-        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NULL ORDER BY queued_at, mutation_id', [$entityType, $entityId]) as [, $payload]) {
-            $mutation = Payload::decode($payload, Mutation::class);
-            if ($mutation->kind === MutationKind::Create) {
-                return $mutation;
-            }
+        // By index on the kind column: a scan decoding every queued write of
+        // the record, on every write sent, made a long drain quadratic.
+        $sql = "SELECT payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND kind = 'create' AND abandoned_reason IS NULL";
+        $bindings = [$entityType, $entityId];
+        if ($space !== null) {
+            $sql .= ' AND space = ?';
+            $bindings[] = $space;
         }
+        $payload = $this->scalar($sql.' ORDER BY queued_at, mutation_id LIMIT 1', $bindings);
 
-        return null;
+        return $payload === null ? null : Payload::decode($payload, Mutation::class);
+    }
+
+    public function recordName(EntityKey $handle, string $name): void
+    {
+        $this->run('DELETE FROM sync_outbox_names WHERE space = ? AND entity_type = ? AND handle = ?', [$handle->space, $handle->type, $handle->id]);
+        $this->run('INSERT INTO sync_outbox_names (space, entity_type, handle, name) VALUES (?, ?, ?, ?)', [$handle->space, $handle->type, $handle->id, $name]);
     }
 
     public function find(string $mutationId): ?Mutation

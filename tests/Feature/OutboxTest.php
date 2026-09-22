@@ -950,6 +950,51 @@ it('leaves another queued create alone when one for the same handle is named', f
         ->and($outbox->head('projects')?->entity->id)->toBe('p');
 })->with(outboxStores());
 
+/**
+ * The same handle in two spaces is two records. One accepted under its own id
+ * in space B let a task in space A through, pointing at A's refused create.
+ */
+it('keeps a refused create in one space from being released by another space\'s record', function (OutboxStore $store) {
+    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects']], []);
+    $outbox->queue(new EntityKey('team-b', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'b')], 0);
+    $outbox->acknowledged($outbox->head('projects', 'team-b') ?? throw new LogicException('expected B'));
+    $refused = $outbox->queue(new EntityKey('team-a', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $task = $outbox->queue(new EntityKey('team-a', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
+    $outbox->refused($outbox->head('projects', 'team-a') ?? throw new LogicException('expected A'), 'validation_failed');
+
+    expect($outbox->orphanReason('projects', 'p'))->toBe('parent_abandoned')
+        ->and($outbox->dismiss($refused->id))->toBe(1)
+        ->and($outbox->abandoned()[0]['mutation']->id)->toBe($task->id);
+})->with(outboxStores());
+
+/** A kept id is not a competing name: a rename in another space still rewrites references to its handle. */
+it('rewrites a reference when another space merely kept the same handle as its id', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-a', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->acknowledged($outbox->head('projects', 'team-a') ?? throw new LogicException('expected A'), new EntityKey('team-a', 'projects', 'X'));
+    $outbox->queue(new EntityKey('team-b', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'b')], 0);
+    $outbox->acknowledged($outbox->head('projects', 'team-b') ?? throw new LogicException('expected B'));
+
+    expect($store->namedAs('projects', 'p'))->toBe('X');
+})->with(outboxStores());
+
+/** Finding a record's create decoded every queued write of it, on every write sent: a long drain of edits went quadratic. */
+it('finds a record\'s create without reading its whole queue', function () {
+    $store = new PdoOutboxStore(new PDO('sqlite::memory:'));
+    $store->migrate();
+    $outbox = outboxFor($store);
+    foreach (range(1, 2000) as $n) {
+        $outbox->queue(note('busy'), MutationKind::Update, [Op::set('t', (string) $n)], 1);
+    }
+
+    $started = hrtime(true);
+    foreach (range(1, 200) as $ignored) {
+        $outbox->queuedCreate('notes', 'busy');
+    }
+
+    expect((hrtime(true) - $started) / 1e6)->toBeLessThan(200.0);
+});
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
