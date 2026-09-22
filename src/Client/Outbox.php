@@ -149,9 +149,10 @@ class Outbox
 
     /**
      * One queued write by its identity, numbered for sending - out of queue
-     * order. Used for a parent's create, which has to reach the server before
-     * the child that points at it. Safe: a create is the first write for its
-     * record, so nothing for the same record can be queued ahead of it.
+     * order. Used for a create that has to reach the server first: a parent's,
+     * before the child that points at it, or a record's own, before an edit of
+     * it queued earlier. Safe: numbers are assigned when a write is handed
+     * out, not when it is queued, so going first takes nothing from anyone.
      */
     public function take(string $mutationId): ?Mutation
     {
