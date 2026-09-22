@@ -162,13 +162,29 @@ class Outbox
         return $this->store->pending($entityType);
     }
 
-    /** The server processed it. Whether it applied, conflicted or was rejected, it is done. */
-    public function acknowledged(Mutation $mutation): void
+    /**
+     * The server processed it. Whether it applied, conflicted or was rejected, it is done.
+     *
+     * $named is the name the server gave a record this mutation created. The
+     * rename of everything queued behind it happens in the SAME transaction as
+     * the acknowledgement: in two, a crash between them removed the create and
+     * left updates addressed to a handle nothing could resolve any more.
+     */
+    public function acknowledged(Mutation $mutation, ?EntityKey $named = null): void
     {
-        $this->store->transaction(function () use ($mutation): void {
+        $this->store->transaction(function () use ($mutation, $named): void {
             $this->store->setAcknowledged($this->stream($mutation->entity), $mutation->entity->space, $mutation->sequence->value);
             $this->store->acknowledge($mutation->id);
+            if ($named !== null && ! $named->equals($mutation->entity)) {
+                $this->store->rekey($mutation->entity, $named);
+            }
         });
+    }
+
+    /** What a record this device created under a handle is actually called; null until the server has said. */
+    public function nameOf(EntityKey $handle): ?EntityKey
+    {
+        return $this->store->nameOf($handle);
     }
 
     /**
@@ -190,7 +206,7 @@ class Outbox
         // device is AHEAD of the server - a server restored from a backup, a
         // device database restored from a newer one - so a counter that could
         // only rise would resend the same number and get the same gap forever.
-        $this->store->setAcknowledged($this->stream($mutation->entity), $mutation->entity->space, $acknowledgedSequence);
+        $this->store->resetAcknowledged($this->stream($mutation->entity), $mutation->entity->space, $acknowledgedSequence);
     }
 
     /**

@@ -350,3 +350,70 @@ it('stops reporting an abandoned write once it is dismissed', function (OutboxSt
 
     expect($outbox->abandoned())->toBe([])->and($outbox->pending())->toBe(0);
 })->with(outboxStores());
+
+/**
+ * Two deliveries can overlap - a queue worker and a scheduler both draining.
+ * A late acknowledgement of 1 arriving after one of 2 wound the counter back,
+ * and the next write went out under a number already used.
+ */
+it('never winds the acknowledgement back for a late answer', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $first = $outbox->head() ?? throw new LogicException('expected a head');
+    $outbox->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
+    $outbox->acknowledged($first);
+    $second = $outbox->head() ?? throw new LogicException('expected a head');
+    $outbox->acknowledged($second);
+
+    // The first delivery's answer, arriving late.
+    $store->setAcknowledged($outbox->stream(note('a')), 'team-1', 1);
+    $outbox->queue(note('c'), MutationKind::Create, [Op::set('t', 'c')], 0);
+
+    expect($outbox->head()?->sequence->value)->toBe(3);
+})->with(outboxStores());
+
+/**
+ * The create leaves the queue and everything behind it is renamed in one
+ * transaction, and the new name is kept - so a crash can never leave updates
+ * addressed to a handle nothing resolves any more.
+ */
+it('renames what is queued behind a create in the same step that acknowledges it, and remembers the name', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $handle = note('handle');
+    $outbox->queue($handle, MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->queue($handle, MutationKind::Update, [Op::set('t', 'b')], 1);
+    $create = $outbox->head() ?? throw new LogicException('expected a head');
+
+    $outbox->acknowledged($create, note('real'));
+
+    expect($outbox->head()?->entity->id)->toBe('real')
+        ->and($outbox->nameOf($handle)?->id)->toBe('real')
+        ->and($outbox->nameOf(note('never-created')))->toBeNull();
+})->with(outboxStores());
+
+it('rolls the rename back with the acknowledgement when the step fails', function () {
+    $pdo = new PDO('sqlite::memory:');
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $durable = new class($pdo) extends PdoOutboxStore
+    {
+        public function rekey(EntityKey $from, EntityKey $to): void
+        {
+            parent::rekey($from, $to);
+
+            throw new RuntimeException('the process died here');
+        }
+    };
+    $durable->migrate();
+    $outbox = outboxFor($durable);
+    $handle = note('handle');
+    $outbox->queue($handle, MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->queue($handle, MutationKind::Update, [Op::set('t', 'b')], 1);
+    $create = $outbox->head() ?? throw new LogicException('expected a head');
+
+    expect(fn () => $outbox->acknowledged($create, note('real')))->toThrow(RuntimeException::class);
+
+    // All or nothing: the create is still there to be answered again.
+    expect($outbox->pending())->toBe(2)
+        ->and($outbox->head()?->id)->toBe($create->id)
+        ->and($outbox->nameOf($handle))->toBeNull();
+});

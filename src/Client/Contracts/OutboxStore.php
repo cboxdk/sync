@@ -45,7 +45,7 @@ interface OutboxStore
      * This renames the key, which the queue owns. A field VALUE that refers to
      * the handle - a child holding its parent's id - is the application's, and
      * no store can know which fields are references, so the rename is reported
-     * rather than hidden.
+     * rather than hidden. It is also remembered, for nameOf().
      */
     public function rekey(EntityKey $from, EntityKey $to): void;
 
@@ -68,12 +68,32 @@ interface OutboxStore
     public function acknowledged(Replica $replica, string $space): int;
 
     /**
-     * Set the acknowledged sequence to exactly this, lower or higher.
+     * Raise the acknowledged sequence; never lowers it.
      *
-     * Not a high-water mark: a server that says it is behind this device is
-     * the only authority on where the stream resumes.
+     * Monotonic because two deliveries can overlap - a queue worker and a
+     * scheduler both draining - and a late acknowledgement of 1 arriving after
+     * one of 2 must not wind the counter back and reuse a number.
      */
     public function setAcknowledged(Replica $replica, string $space, int $sequence): void;
+
+    /**
+     * Set the acknowledged sequence to exactly this, lower or higher.
+     *
+     * Only for a server that has said where it is. A gap is reported when this
+     * device is AHEAD - a server restored from a backup - and a counter that
+     * could only rise would resend the same number and get the same gap for
+     * ever.
+     */
+    public function resetAcknowledged(Replica $replica, string $space, int $sequence): void;
+
+    /**
+     * The name the server gave a record this device created under a handle.
+     *
+     * Kept, because a device that crashes after the server answered but before
+     * the application stored the new name would otherwise have nothing left
+     * that says what its handle became.
+     */
+    public function nameOf(EntityKey $handle): ?EntityKey;
 
     public function acknowledge(string $mutationId): void;
 

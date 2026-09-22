@@ -54,6 +54,16 @@ class PdoOutboxStore implements OutboxStore
         $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_position ON sync_outbox (queued_at)');
         // A push drains one type in one space.
         $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_stream ON sync_outbox (entity_type, space, queued_at, mutation_id)');
+        // What each handle this device created under became. Written in the
+        // same transaction as the acknowledgement, so a crash cannot leave the
+        // create gone and nothing that says what it was called.
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS sync_outbox_names (
+            space $name NOT NULL,
+            entity_type $name NOT NULL,
+            handle $name NOT NULL,
+            name $name NOT NULL,
+            PRIMARY KEY (space, entity_type, handle)
+        )");
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS sync_outbox_sequences (
             replica_id $name NOT NULL,
             space $name NOT NULL,
@@ -85,6 +95,9 @@ class PdoOutboxStore implements OutboxStore
 
     public function rekey(EntityKey $from, EntityKey $to): void
     {
+        $this->run('DELETE FROM sync_outbox_names WHERE space = ? AND entity_type = ? AND handle = ?', [$from->space, $from->type, $from->id]);
+        $this->run('INSERT INTO sync_outbox_names (space, entity_type, handle, name) VALUES (?, ?, ?, ?)', [$from->space, $from->type, $from->id, $to->id]);
+
         // The space and type are columns, the id is only inside the payload, so
         // the rows are narrowed by column and then matched exactly on the key.
         $rows = $this->rows(
@@ -137,7 +150,20 @@ class PdoOutboxStore implements OutboxStore
         if ($this->scalar('SELECT 1 FROM sync_outbox_sequences WHERE replica_id = ? AND space = ?', [$replica->id, $space]) === null) {
             $this->run('INSERT INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0)', [$replica->id, $space]);
         }
+        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ? AND assigned < ?', [$sequence, $replica->id, $space, $sequence]);
+    }
+
+    public function resetAcknowledged(Replica $replica, string $space, int $sequence): void
+    {
+        $this->setAcknowledged($replica, $space, 0);
         $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ?', [$sequence, $replica->id, $space]);
+    }
+
+    public function nameOf(EntityKey $handle): ?EntityKey
+    {
+        $name = $this->scalar('SELECT name FROM sync_outbox_names WHERE space = ? AND entity_type = ? AND handle = ?', [$handle->space, $handle->type, $handle->id]);
+
+        return $name === null ? null : new EntityKey($handle->space, $handle->type, $name);
     }
 
     public function acknowledge(string $mutationId): void

@@ -22,6 +22,9 @@ class InMemoryOutboxStore implements OutboxStore
     /** @var array<string, int> */
     private array $acknowledged = [];
 
+    /** @var array<string, EntityKey> handle key => the name the server gave it */
+    private array $names = [];
+
     private bool $active = false;
 
     public function append(Mutation $mutation): void
@@ -44,6 +47,7 @@ class InMemoryOutboxStore implements OutboxStore
 
     public function rekey(EntityKey $from, EntityKey $to): void
     {
+        $this->names[$from->key()] = $to;
         foreach ($this->queue as $index => $mutation) {
             if ($mutation->entity->equals($from)) {
                 $this->queue[$index] = $mutation->withEntity($to);
@@ -79,7 +83,17 @@ class InMemoryOutboxStore implements OutboxStore
     public function setAcknowledged(Replica $replica, string $space, int $sequence): void
     {
         $key = self::stream($replica, $space);
-        $this->acknowledged[$key] = $sequence;
+        $this->acknowledged[$key] = max($sequence, $this->acknowledged[$key] ?? 0);
+    }
+
+    public function resetAcknowledged(Replica $replica, string $space, int $sequence): void
+    {
+        $this->acknowledged[self::stream($replica, $space)] = $sequence;
+    }
+
+    public function nameOf(EntityKey $handle): ?EntityKey
+    {
+        return $this->names[$handle->key()] ?? null;
     }
 
     private static function stream(Replica $replica, string $space): string
@@ -130,11 +144,11 @@ class InMemoryOutboxStore implements OutboxStore
             throw new TransientFailure('Nested outbox transaction is unsupported');
         }
         $this->active = true;
-        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged];
+        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged, $this->names];
         try {
             return $callback();
         } catch (\Throwable $failure) {
-            [$this->queue, $this->abandoned, $this->acknowledged] = $snapshot;
+            [$this->queue, $this->abandoned, $this->acknowledged, $this->names] = $snapshot;
 
             throw $failure;
         } finally {
