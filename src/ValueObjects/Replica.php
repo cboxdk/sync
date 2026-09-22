@@ -13,7 +13,7 @@ readonly class Replica
         if ($id === '') {
             throw new InvalidRequest('Replica identity must not be empty');
         }
-        Identifier::check($id, 'Replica identity');
+        // Bounded where a write is made (Mutation), not here - see EntityKey.
     }
 
     public function stream(string $space): string

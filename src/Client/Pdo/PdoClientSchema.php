@@ -90,6 +90,9 @@ class PdoClientSchema
         foreach ($this->statements() as $statement) {
             $connection->exec($statement);
         }
+        foreach (['sync_client_entities', 'sync_client_memberships', 'sync_client_views', 'sync_client_applied_tokens'] as $table) {
+            MysqlCollation::repair($connection, $table);
+        }
     }
 
     public function beginStatement(): string

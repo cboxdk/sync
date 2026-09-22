@@ -184,10 +184,16 @@ class Engine
     /** The record as it would be if every candidate this mutation preserved were chosen; null when it preserved none. */
     private function asIfChosen(EntityRecord $proposed, Mutation $mutation, MutationResult $outcome): ?EntityRecord
     {
+        if (! in_array(ConflictDecision::Preserve, $outcome->decisions, true)) {
+            return null;
+        }
+        // An atomic proposal is chosen whole - its other fields were held back
+        // with it, not dropped - so it is validated whole. Substituting only
+        // the conflicted field judged a combination nobody proposed.
         $fields = $proposed->fields;
         $preserved = false;
         foreach ($mutation->operations as $operation) {
-            if (($outcome->decisions[$operation->field] ?? null) === ConflictDecision::Preserve) {
+            if ($mutation->atomic || ($outcome->decisions[$operation->field] ?? null) === ConflictDecision::Preserve) {
                 $fields[$operation->field] = new FieldState($operation->value, $fields[$operation->field]->version ?? null, $fields[$operation->field]->origin ?? null);
                 $preserved = true;
             }

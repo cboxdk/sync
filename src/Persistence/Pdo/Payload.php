@@ -24,6 +24,7 @@ use Cbox\Sync\Enums\ChangeKind;
 use Cbox\Sync\Enums\ConflictDecision;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Enums\MutationStatus;
+use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\ValueObjects\CommitSequence;
 use Cbox\Sync\ValueObjects\EntityKey;
@@ -125,7 +126,14 @@ class Payload
         // NUL bytes, which a PostgreSQL text column cannot hold at all. Keeping
         // the payload to a safe alphabet makes it identical on every driver
         // instead of working by accident on the permissive ones.
-        $deflated = gzdeflate(serialize($value), 3);
+        $serialized = serialize($value);
+        // The same bound the reader enforces. Written past it, a commit would
+        // store fine and then be unreadable by every device that pulls it; so
+        // the write that would produce it fails instead, and rolls back.
+        if (strlen($serialized) > self::MAX_INFLATED) {
+            throw new InvalidRequest('This write would store more than '.self::MAX_INFLATED.' bytes in one row; the record has grown too large to sync');
+        }
+        $deflated = gzdeflate($serialized, 3);
         if ($deflated === false) {
             throw new ProtocolException('Could not compress a payload for storage');
         }

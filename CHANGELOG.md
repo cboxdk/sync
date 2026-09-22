@@ -18,7 +18,10 @@
 - **One oversized identifier could stop every bootstrap of its view.** Identifiers are capped at 150 characters - what the columns hold - and may not contain NUL, in `EntityKey`, `Replica` and `Mutation`, so every entry point inherits it.
 - **A preserved candidate skipped the value checks.** A conflict leaves the record unchanged, so the validator never saw the value being kept. The record is now also validated as it would be if the candidate were chosen.
 - **Receipts grew without bound.** `prune()` drops the receipts written in the commits it removes. A replay older than the horizon is answered as a gap and applies nothing.
-- A truncated deflate payload is refused instead of decoding to a prefix.
+- A truncated deflate payload is refused instead of decoding to a prefix, and a write that would store a row larger than the reader accepts fails instead of producing a commit nobody can pull.
+- An atomic proposal that preserves a conflict is validated whole, as it would be chosen.
+- **The PDO outbox could not be installed on MySQL at all** (`CREATE INDEX IF NOT EXISTS`), and client schemas created by earlier releases kept `utf8mb4_bin`. Both are fixed, and the outbox suite now runs on MySQL and PostgreSQL too.
+- Identifiers are bounded where a write is made rather than wherever a key is built, so a record an earlier release stored with a longer id stays readable.
 - A change could be recorded as a `Record` carrying no record; found by the strict analysis rules.
 
 ### Performance

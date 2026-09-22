@@ -13,9 +13,9 @@ readonly class EntityKey
         if ($space === '' || $type === '' || $id === '') {
             throw new InvalidRequest('Entity identity must not be empty');
         }
-        Identifier::check($space, 'Space');
-        Identifier::check($type, 'Entity type');
-        Identifier::check($id, 'Entity id');
+        // Bounded where a write is made (Mutation), not here: a key is also
+        // rebuilt from storage and from continuation tokens, and a record an
+        // earlier release stored with a longer id must stay readable.
     }
 
     public function key(): string

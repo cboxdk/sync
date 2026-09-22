@@ -46,14 +46,14 @@ class PdoOutboxStore implements OutboxStore
         // a 5,000-deep backlog: 32 seconds of local scanning before a single
         // request goes out, on the device, on the exact day the user most needs
         // it to work.
-        $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_head ON sync_outbox (entity_type, queued_at, mutation_id)');
+        $this->index('sync_outbox_head', 'sync_outbox', 'entity_type, queued_at, mutation_id');
         // append() takes the next position with MAX(queued_at), which the index
         // above cannot serve because entity_type leads it. Without this one,
         // queueing is O(n) per write and a long offline session gets slower the
         // longer it lasts.
-        $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_position ON sync_outbox (queued_at)');
+        $this->index('sync_outbox_position', 'sync_outbox', 'queued_at');
         // A push drains one type in one space.
-        $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_stream ON sync_outbox (entity_type, space, queued_at, mutation_id)');
+        $this->index('sync_outbox_stream', 'sync_outbox', 'entity_type, space, queued_at, mutation_id');
         // The entity id as a column, so a rename finds the rows it concerns
         // by index instead of decoding every queued write of that type - which
         // made draining a long run of offline creates quadratic. Added to an
@@ -62,7 +62,7 @@ class PdoOutboxStore implements OutboxStore
         if (! in_array('entity_id', $this->columns('sync_outbox'), true)) {
             $this->pdo->exec("ALTER TABLE sync_outbox ADD COLUMN entity_id $name NULL");
         }
-        $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_entity ON sync_outbox (space, entity_type, entity_id)');
+        $this->index('sync_outbox_entity', 'sync_outbox', 'space, entity_type, entity_id');
         // What each handle this device created under became. Written in the
         // same transaction as the acknowledgement, so a crash cannot leave the
         // create gone and nothing that says what it was called.
@@ -79,6 +79,9 @@ class PdoOutboxStore implements OutboxStore
             assigned BIGINT NOT NULL,
             PRIMARY KEY (replica_id, space)
         )");
+        foreach (['sync_outbox', 'sync_outbox_names', 'sync_outbox_sequences'] as $table) {
+            MysqlCollation::repair($this->pdo, $table);
+        }
     }
 
     public function append(Mutation $mutation): void
@@ -214,6 +217,21 @@ class PdoOutboxStore implements OutboxStore
         return (int) ($this->scalar('SELECT COUNT(*) FROM sync_outbox WHERE abandoned_reason IS NULL AND entity_type = ?', [$entityType]) ?? '0');
     }
 
+    /** CREATE INDEX IF NOT EXISTS, which MySQL does not have. */
+    private function index(string $name, string $table, string $columns): void
+    {
+        if ($this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) === 'mysql') {
+            $lookup = $this->pdo->prepare('SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? LIMIT 1');
+            $lookup->execute([$table, $name]);
+            if ($lookup->fetchColumn() === false) {
+                $this->pdo->exec(sprintf('CREATE INDEX %s ON %s (%s)', $name, $table, $columns));
+            }
+
+            return;
+        }
+        $this->pdo->exec(sprintf('CREATE INDEX IF NOT EXISTS %s ON %s (%s)', $name, $table, $columns));
+    }
+
     /** @return list<string> Lowercased column names of one table. */
     private function columns(string $table): array
     {
@@ -235,10 +253,15 @@ class PdoOutboxStore implements OutboxStore
         return $names;
     }
 
-    public function queued(): array
+    public function queued(string $space, array $entityTypes): array
     {
+        if ($entityTypes === []) {
+            return [];
+        }
         $mutations = [];
-        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE abandoned_reason IS NULL ORDER BY queued_at, mutation_id', []) as $row) {
+        $sql = 'SELECT mutation_id, payload FROM sync_outbox WHERE abandoned_reason IS NULL AND space = ? AND entity_type IN ('
+            .implode(', ', array_fill(0, count($entityTypes), '?')).') ORDER BY queued_at, mutation_id';
+        foreach ($this->rows($sql, [$space, ...$entityTypes]) as $row) {
             $mutations[] = Payload::decode($row[1], Mutation::class);
         }
 

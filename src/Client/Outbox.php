@@ -9,6 +9,7 @@ use Cbox\Sync\Data\FieldOperation;
 use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Data\Resolution;
 use Cbox\Sync\Enums\MutationKind;
+use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\Identifier;
 use Cbox\Sync\ValueObjects\MutationSequence;
@@ -136,6 +137,12 @@ class Outbox
         if ($from->equals($to)) {
             return;
         }
+        if ($from->space !== $to->space || $from->type !== $to->type) {
+            // The server names a record; it never moves it. A rename that
+            // changes the space or type is not one, and a durable name for it
+            // would have nowhere to say so.
+            throw new InvalidRequest('A rename keeps the space and type; only the id changes');
+        }
 
         $this->store->transaction(function () use ($from, $to): void {
             $this->store->rekey($from, $to);
@@ -215,10 +222,16 @@ class Outbox
         if ($references === []) {
             return;
         }
-        foreach ($this->store->queued() as $queued) {
-            if ($queued->entity->space !== $handle->space) {
-                continue;
+        // Only the types that have a field pointing at the created record's
+        // type, in its space - narrowed by the store, not by decoding the
+        // whole backlog.
+        $types = [];
+        foreach ($references as $type => $fields) {
+            if (in_array($handle->type, $fields, true)) {
+                $types[] = $type;
             }
+        }
+        foreach ($this->store->queued($handle->space, $types) as $queued) {
             $fields = array_keys(array_filter($references[$queued->entity->type] ?? [], fn (string $target): bool => $target === $handle->type));
             if ($fields === []) {
                 continue;

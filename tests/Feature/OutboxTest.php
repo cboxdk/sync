@@ -10,6 +10,7 @@ use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Exceptions\InvalidRequest;
+use Cbox\Sync\Testing\Environment;
 use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\MutationSequence;
 use Cbox\Sync\ValueObjects\RecordVersion;
@@ -17,10 +18,32 @@ use Cbox\Sync\ValueObjects\Replica;
 
 function outboxStores(): array
 {
-    $durable = new PdoOutboxStore(new PDO('sqlite::memory:'));
-    $durable->migrate();
+    $stores = [
+        'memory' => fn (): OutboxStore => new InMemoryOutboxStore,
+        'sqlite' => function (): OutboxStore {
+            $durable = new PdoOutboxStore(new PDO('sqlite::memory:'));
+            $durable->migrate();
 
-    return ['memory' => new InMemoryOutboxStore, 'sqlite' => $durable];
+            return $durable;
+        },
+    ];
+    // The configured database too: the outbox had never been installed on
+    // MySQL, and nothing noticed because nothing ran it there.
+    $dsn = Environment::get('SYNC_DSN');
+    if ($dsn !== '') {
+        $stores['database'] = function () use ($dsn): OutboxStore {
+            $pdo = new PDO($dsn, Environment::get('SYNC_DB_USER'), Environment::get('SYNC_DB_PASSWORD'), [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+            $durable = new PdoOutboxStore($pdo);
+            $durable->migrate();
+            foreach (['sync_outbox', 'sync_outbox_names', 'sync_outbox_sequences'] as $table) {
+                $pdo->exec('DELETE FROM '.$table);
+            }
+
+            return $durable;
+        };
+    }
+
+    return $stores;
 }
 
 function outboxFor(OutboxStore $store, string $prefix = 'm'): Outbox
@@ -499,3 +522,11 @@ it('makes a valid stream from a device id of any valid length', function () {
 
     expect(strlen((string) $outbox->head()?->replica->id))->toBeLessThanOrEqual(150);
 });
+
+/** The server names a record; it never moves it. */
+it('refuses a rename that changes the space or type', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+
+    expect(fn () => $outbox->rekey(note('a'), new EntityKey('team-2', 'notes', 'a')))->toThrow(InvalidRequest::class)
+        ->and(fn () => $outbox->rekey(note('a'), new EntityKey('team-1', 'tasks', 'a')))->toThrow(InvalidRequest::class);
+})->with(outboxStores());

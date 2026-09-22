@@ -43,6 +43,10 @@ readonly class Mutation
             throw new InvalidRequest('Invalid mutation identity/dependency');
         }
         Identifier::check($id, 'Mutation id');
+        Identifier::check($entity->space, 'Space');
+        Identifier::check($entity->type, 'Entity type');
+        Identifier::check($entity->id, 'Entity id');
+        Identifier::check($replica->id, 'Replica identity');
         if ($dependsOn !== null) {
             Identifier::check($dependsOn, 'Mutation dependency');
         }

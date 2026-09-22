@@ -138,3 +138,35 @@ it('validates the value a conflict would preserve, not only the record', functio
     expect($result->status)->toBe(MutationStatus::ValidationFailed)
         ->and($store->openGroups($key))->toBe([]);
 });
+
+/** Refuses a record whose title equals its body. */
+final class TitleIsNotBody implements EntityValidator
+{
+    public function validate(ValidationContext $context): ValidationResult
+    {
+        return $context->proposed->value('title')->equals($context->proposed->value('body'))
+            ? new ValidationResult([new ValidationFailure('same', 'Title and body must differ', 'title')])
+            : new ValidationResult;
+    }
+}
+
+/**
+ * An atomic proposal is chosen whole. Validating only its conflicted field
+ * judged a combination nobody proposed, and refused a valid proposal.
+ */
+it('validates an atomic proposal whole, as it would be chosen', function () {
+    $store = $this->syncStore();
+    $engine = new Engine($store, new PreserveConflict, validator: new TitleIsNotBody);
+    $key = new EntityKey('test', 'notes', 'one');
+    $engine->process(new Mutation('seed', $key, new Replica('server'), new MutationSequence(1), MutationKind::Create, new RecordVersion(0), [
+        Op::set('title', 'original'), Op::set('body', 'text'),
+    ]));
+    $engine->process(new Mutation('a', $key, new Replica('a'), new MutationSequence(1), MutationKind::Update, new RecordVersion(1), [Op::set('title', 'from-a')]));
+
+    // Conflicts on title only. Chosen whole it is title "text", body "new" - valid.
+    $result = $engine->process(new Mutation('b', $key, new Replica('b'), new MutationSequence(1), MutationKind::Update, new RecordVersion(1), [
+        Op::set('title', 'text'), Op::set('body', 'new'),
+    ]));
+
+    expect($result->status)->toBe(MutationStatus::Conflict);
+});

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Cbox\Sync\Data\FieldOperation as Op;
+use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Data\Resolution;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Enums\MutationStatus;
@@ -13,6 +14,7 @@ use Cbox\Sync\Support\UuidV7Generator;
 use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\FieldValue;
 use Cbox\Sync\ValueObjects\MutationSequence;
+use Cbox\Sync\ValueObjects\RecordVersion;
 use Cbox\Sync\ValueObjects\Replica;
 
 it('rejects spoofed dependencies across replicas entities and spaces', function () {
@@ -165,14 +167,23 @@ it('classifies malformed candidate IDs as invalid requests before deduplication'
     expect(fn () => new Resolution('group', 1, [2 => 'a']))->toThrow(InvalidRequest::class);
 });
 
-/** One oversized id used to make every later bootstrap of its view impossible. */
-it('refuses an identifier longer than the columns that store it', function () {
+/**
+ * One oversized id used to make every later bootstrap of its view impossible.
+ * Bounded where a write is made; a key rebuilt from storage or a token stays
+ * readable, so a record an earlier release stored with a longer id is not
+ * stranded.
+ */
+it('refuses an identifier longer than the columns that store it, at the write', function () {
     $long = str_repeat('x', 151);
+    $write = fn (EntityKey $key, string $replica = 'r', string $id = 'm') => new Mutation($id, $key, new Replica($replica), new MutationSequence(1), MutationKind::Create, new RecordVersion(0));
 
-    expect(fn () => new EntityKey('s', 't', $long))->toThrow(InvalidRequest::class, 'longer than 150')
-        ->and(fn () => new EntityKey($long, 't', 'i'))->toThrow(InvalidRequest::class)
-        ->and(fn () => new Replica($long))->toThrow(InvalidRequest::class)
-        ->and(fn () => new EntityKey('s', 't', "a\0b"))->toThrow(InvalidRequest::class, 'NUL')
+    expect(fn () => $write(new EntityKey('s', 't', $long)))->toThrow(InvalidRequest::class, 'longer than 150')
+        ->and(fn () => $write(new EntityKey($long, 't', 'i')))->toThrow(InvalidRequest::class)
+        ->and(fn () => $write(new EntityKey('s', 't', 'i'), $long))->toThrow(InvalidRequest::class)
+        ->and(fn () => $write(new EntityKey('s', 't', 'i'), 'r', $long))->toThrow(InvalidRequest::class)
+        ->and(fn () => $write(new EntityKey('s', 't', "a\0b")))->toThrow(InvalidRequest::class, 'NUL')
         // Characters, not bytes: the columns are counted the same way.
-        ->and((new EntityKey('s', 't', str_repeat('æ', 150)))->id)->toBe(str_repeat('æ', 150));
+        ->and($write(new EntityKey('s', 't', str_repeat('æ', 150)))->entity->id)->toBe(str_repeat('æ', 150))
+        // A key read back from storage is not refused.
+        ->and((new EntityKey('s', 't', $long))->id)->toBe($long);
 });

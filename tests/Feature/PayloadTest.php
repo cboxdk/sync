@@ -6,6 +6,7 @@ use Cbox\Sync\Data\FieldOperation;
 use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Engine;
 use Cbox\Sync\Enums\MutationKind;
+use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Persistence\Pdo\Payload;
 use Cbox\Sync\Persistence\Pdo\PdoStore;
@@ -129,4 +130,14 @@ it('refuses a payload whose deflate stream was cut short', function () {
 
     expect(fn () => Payload::decode('2:'.base64_encode(substr($whole, 0, -4)), EntityKey::class))
         ->toThrow(ProtocolException::class);
+});
+
+/**
+ * The reader refuses anything past its bound, so a writer that stored past it
+ * made a commit every device would fail to pull. The write fails instead.
+ */
+it('refuses to store a row larger than it could read back', function () {
+    $huge = new EntityKey('team-1', 'notes', str_repeat('x', 17 * 1024 * 1024));
+
+    expect(fn () => Payload::encode($huge))->toThrow(InvalidRequest::class, 'too large');
 });
