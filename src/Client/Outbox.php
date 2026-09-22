@@ -27,6 +27,13 @@ use Cbox\Sync\ValueObjects\Replica;
  */
 class Outbox
 {
+    /**
+     * The reason prefix of a create the application has dismissed. Kept, not
+     * deleted, and no longer reported: it is the one thing that still says the
+     * handle was a record this device created and never learned the name of.
+     */
+    public const DISMISSED = 'dismissed:';
+
     /** @var array<string, array<string, string>> type => [field => the type it points at] */
     private array $references = [];
 
@@ -311,14 +318,39 @@ class Outbox
     /** Whether this record's create was abandoned - it will not exist unless the application requeues it. */
     public function createAbandoned(string $entityType, string $entityId): bool
     {
-        foreach ($this->store->abandoned() as $entry) {
-            $mutation = $entry['mutation'];
-            if ($mutation->kind === MutationKind::Create && $mutation->entity->type === $entityType && $mutation->entity->id === $entityId) {
-                return true;
-            }
+        return $this->store->abandonedCreate($entityType, $entityId) !== null;
+    }
+
+    /**
+     * Why a write that needs this record cannot be sent: parent_unknown when
+     * the record's create may be on the server - find its name, then requeue -
+     * parent_abandoned when it certainly is not; null when its create was not
+     * abandoned.
+     */
+    public function orphanReason(string $entityType, string $entityId): ?string
+    {
+        $create = $this->store->abandonedCreate($entityType, $entityId);
+        if ($create === null) {
+            return null;
         }
 
-        return false;
+        return $this->mayHaveLandedAs($create) ? 'parent_unknown' : 'parent_abandoned';
+    }
+
+    /** Whether this abandoned write may be on the server all the same. */
+    public function mayHaveLanded(string $mutationId): bool
+    {
+        $entry = $this->store->abandonedOne($mutationId);
+
+        return $entry !== null && $this->mayHaveLandedAs($entry);
+    }
+
+    /** @param array{mutation: Mutation, reason: string} $entry */
+    private function mayHaveLandedAs(array $entry): bool
+    {
+        $reason = str_starts_with($entry['reason'], self::DISMISSED) ? substr($entry['reason'], strlen(self::DISMISSED)) : $entry['reason'];
+
+        return in_array($reason, self::MAY_HAVE_LANDED, true) || $this->store->unanswered($entry['mutation']->id) > 0;
     }
 
     /** Move queued writes of a type from one scope label to another. */
@@ -487,6 +519,19 @@ class Outbox
         $scopedBy ??= $this->scopedBy;
         $named = new EntityKey($handle->space, $handle->type, $name);
         $this->store->transaction(function () use ($handle, $named, $references, $scopedBy): void {
+            $create = $this->store->abandonedCreate($handle->type, $handle->id);
+            if ($create === null || ! $create['mutation']->entity->equals($handle)) {
+                // Only a record this device created and gave up on: renaming
+                // anything else would move writes that are not about it -
+                // another tenant's, with an id that happens to match.
+                throw new InvalidRequest(sprintf('%s %s is not a create this device abandoned.', $handle->type, $handle->id));
+            }
+            if ($this->queuedCreate($handle->type, $handle->id) !== null || $this->store->nameOf($handle) !== null) {
+                // Requeued, or already named: renaming a queued create under
+                // way would change what it was sent as.
+                throw new InvalidRequest(sprintf('%s %s is queued again or already named.', $handle->type, $handle->id));
+            }
+            $this->store->forget($create['mutation']->id);
             $this->store->rekey($handle, $named);
             $this->rewriteReferences($handle, $named->id, $references);
             foreach ($scopedBy as $type => $parentType) {
@@ -707,21 +752,21 @@ class Outbox
                 $space = $parentType === null ? $old->entity->space : ($this->nameOfOther($parentType, $old->entity->space) ?? $old->entity->space);
                 $id = $this->store->nameOf($old->entity)->id ?? $old->entity->id;
                 $operations = [];
-                $mapped = false;
                 foreach ($old->operations as $operation) {
                     $target = $references[$type][$operation->field] ?? null;
                     $value = $operation->value->exists ? $operation->value->value() : null;
                     $named = $target !== null && is_string($value) ? $this->nameOfOther($target, $value) : null;
-                    $mapped = $mapped || ($named !== null && $named !== $value);
                     $operations[] = $named === null ? $operation : FieldOperation::set($operation->field, $named);
                 }
 
                 $key = new EntityKey($space, $type, $id);
-                if ($entry['reason'] === 'parent_unknown' && ! $evenIfItMayHaveLanded && $key->equals($old->entity) && ! $mapped) {
-                    // Its parent may exist, but no name for it has been given:
-                    // sent now, it would carry the handle the server never
-                    // heard of. Record the name with found() first.
-                    throw new InvalidRequest(sprintf('Write %s needs a record whose name is not known yet; record it with found() and requeue again.', $mutationId));
+                $blocked = $this->unnamedParent($old, $references, $scopedBy);
+                if ($blocked !== null && ! $evenIfItMayHaveLanded) {
+                    // A record it needs was created here, abandoned, and never
+                    // named: sent now, it would carry a handle the server never
+                    // heard of. Requeue that create first, or - if it turned
+                    // out to exist - record its name with found().
+                    throw new InvalidRequest(sprintf('Write %s needs %s %s, whose create was abandoned and never named; requeue that create first, or record its name with found().', $mutationId, $blocked[0], $blocked[1]));
                 }
 
                 return $this->append($key, $old->kind, $operations, $old->baseVersion->value, $old->atomic, $old->resolution, null);
@@ -756,26 +801,102 @@ class Outbox
             // One row, not every abandoned write decoded: a restored stream
             // settles hundreds, and an application dismisses each in turn.
             $entry = $this->store->abandonedOne($mutationId);
+            if ($entry === null) {
+                return 0;
+            }
+            $old = $entry['mutation'];
             $cascaded = 0;
-            if ($entry !== null) {
-                $old = $entry['mutation'];
-                if ($old->kind === MutationKind::Create && $this->queuedCreate($old->entity->type, $old->entity->id) === null) {
-                    // Whether or not the record exists, this device never
-                    // learned its name, so the writes that need it would go
-                    // out carrying a handle the server never heard of. When it
-                    // may exist they are parent_unknown: find it, then requeue
-                    // them under its name.
-                    $mayHaveLanded = in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->unanswered($old->id) > 0;
-                    foreach ($this->dependents($old->entity, $references, $scopedBy) as $dependent) {
-                        $this->store->abandon($dependent->id, $mayHaveLanded ? 'parent_unknown' : 'parent_abandoned');
-                        $cascaded++;
+            if ($old->kind !== MutationKind::Create) {
+                $this->store->dismiss($mutationId);
+
+                return 0;
+            }
+            // Whether or not the record exists, this device never learned its
+            // name, so the writes that need it would go out carrying a handle
+            // the server never heard of. When it may exist they are
+            // parent_unknown: find it, then requeue them under its name.
+            $orphan = $this->mayHaveLandedAs($entry) ? 'parent_unknown' : 'parent_abandoned';
+            if ($this->queuedCreate($old->entity->type, $old->entity->id) === null) {
+                foreach ($this->dependents($old->entity, $references, $scopedBy) as $dependent) {
+                    $this->store->abandon($dependent->id, $orphan);
+                    $cascaded++;
+                }
+                if ($orphan === 'parent_unknown') {
+                    // Already abandoned with it by a push, before anyone knew
+                    // it might exist.
+                    foreach ($this->store->abandoned() as $abandoned) {
+                        if ($abandoned['reason'] === 'parent_abandoned' && $this->needs($abandoned['mutation'], $old->entity, $references, $scopedBy)) {
+                            $this->store->setReason($abandoned['mutation']->id, 'parent_unknown');
+                        }
                     }
                 }
             }
-            $this->store->dismiss($mutationId);
+            // Kept, and no longer reported: it is what still says this handle
+            // was never named.
+            $this->store->setReason($mutationId, self::DISMISSED.$entry['reason']);
 
             return $cascaded;
         });
+    }
+
+    /**
+     * Whether a write needs this record to exist: an edit of it, a record
+     * living under it, a record whose declared reference points at it.
+     *
+     * @param  array<string, array<string, string>>  $references
+     * @param  array<string, string>  $scopedBy
+     */
+    private function needs(Mutation $write, EntityKey $record, array $references, array $scopedBy): bool
+    {
+        $type = $write->entity->type;
+        if ($type === $record->type && $write->entity->id === $record->id && $write->entity->space === $record->space && $write->kind !== MutationKind::Create) {
+            return true;
+        }
+        if (($scopedBy[$type] ?? null) === $record->type && $write->entity->space === $record->id) {
+            return true;
+        }
+        foreach ($write->operations as $operation) {
+            if (($references[$type][$operation->field] ?? null) === $record->type && $operation->value->exists && $operation->value->value() === $record->id) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The first record this write needs whose create this device abandoned
+     * and never learned the name of - as [type, handle] - or null.
+     *
+     * @param  array<string, array<string, string>>  $references
+     * @param  array<string, string>  $scopedBy
+     * @return array{0: string, 1: string}|null
+     */
+    private function unnamedParent(Mutation $write, array $references, array $scopedBy): ?array
+    {
+        $parents = [];
+        if ($write->kind !== MutationKind::Create) {
+            $parents[] = [$write->entity->type, $write->entity->id, $write->entity];
+        }
+        $scopeType = $scopedBy[$write->entity->type] ?? null;
+        if ($scopeType !== null) {
+            $parents[] = [$scopeType, $write->entity->space, null];
+        }
+        foreach ($write->operations as $operation) {
+            $target = $references[$write->entity->type][$operation->field] ?? null;
+            $value = $operation->value->exists ? $operation->value->value() : null;
+            if ($target !== null && is_string($value)) {
+                $parents[] = [$target, $value, null];
+            }
+        }
+        foreach ($parents as [$type, $handle, $own]) {
+            $named = $own instanceof EntityKey ? $this->store->nameOf($own) : null;
+            if ($named === null && $this->store->namedAs($type, $handle) === null && $this->store->abandonedCreate($type, $handle) !== null) {
+                return [$type, $handle];
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -801,15 +922,7 @@ class Outbox
         }
         $found = [];
         foreach ($this->store->queued(array_values(array_unique($types))) as $queued) {
-            $type = $queued->entity->type;
-            $depends = ($type === $record->type && $queued->entity->id === $record->id && $queued->entity->space === $record->space)
-                || (($scopedBy[$type] ?? null) === $record->type && $queued->entity->space === $record->id);
-            foreach ($queued->operations as $operation) {
-                if (($references[$type][$operation->field] ?? null) === $record->type && $operation->value->exists && $operation->value->value() === $record->id) {
-                    $depends = true;
-                }
-            }
-            if ($depends) {
+            if ($this->needs($queued, $record, $references, $scopedBy)) {
                 $found[] = $queued;
             }
         }

@@ -6,6 +6,7 @@ namespace Cbox\Sync\Client;
 
 use Cbox\Sync\Client\Contracts\OutboxStore;
 use Cbox\Sync\Data\Mutation;
+use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\ValueObjects\EntityKey;
@@ -226,12 +227,39 @@ class InMemoryOutboxStore implements OutboxStore
 
     public function abandoned(): array
     {
-        return $this->abandoned;
+        return array_values(array_filter($this->abandoned, fn (array $entry): bool => ! str_starts_with($entry['reason'], Outbox::DISMISSED)));
+    }
+
+    public function setReason(string $mutationId, string $reason): void
+    {
+        foreach ($this->abandoned as $index => $entry) {
+            if ($entry['mutation']->id === $mutationId) {
+                $this->abandoned[$index]['reason'] = $reason;
+            }
+        }
+    }
+
+    public function abandonedCreate(string $entityType, string $entityId): ?array
+    {
+        foreach ($this->abandoned as $entry) {
+            $mutation = $entry['mutation'];
+            if ($mutation->kind === MutationKind::Create && $mutation->entity->type === $entityType && $mutation->entity->id === $entityId) {
+                return $entry;
+            }
+        }
+
+        return null;
+    }
+
+    public function forget(string $mutationId): void
+    {
+        $this->acknowledge($mutationId);
+        $this->abandoned = array_values(array_filter($this->abandoned, fn (array $entry): bool => $entry['mutation']->id !== $mutationId));
     }
 
     public function abandonedOne(string $mutationId): ?array
     {
-        foreach ($this->abandoned as $entry) {
+        foreach ($this->abandoned() as $entry) {
             if ($entry['mutation']->id === $mutationId) {
                 return $entry;
             }

@@ -807,6 +807,77 @@ it('requeues a parent_unknown child only once its parent\'s name is found', func
     expect($requeued?->operations[0]->value->value())->toBe('srv-42');
 })->with(outboxStores());
 
+/**
+ * Once a refused create was dismissed nothing remembered its handle, so a
+ * child requeued afterwards went out pointing at a record the server never
+ * heard of. The dismissed create is kept, unreported, and still says so.
+ */
+it('refuses to requeue a child of a dismissed create until that create is requeued', function (OutboxStore $store) {
+    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects']], []);
+    $parent = $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+    $child = $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
+    $outbox->refused($outbox->head('projects') ?? throw new LogicException('expected the create'), 'forbidden');
+    $outbox->dismiss($parent->id);
+
+    expect($outbox->abandoned())->toHaveCount(1)
+        ->and(fn () => $outbox->requeue($child->id))->toThrow(InvalidRequest::class)
+        ->and($outbox->orphanReason('projects', 'p'))->toBe('parent_abandoned');
+})->with(outboxStores());
+
+/** A server that keeps the device's id names a record by its handle; found() with that name unblocks its children. */
+it('unblocks a child when found() records the handle itself as the name', function (OutboxStore $store) {
+    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects']], []);
+    $parent = $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+    $child = $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
+    $outbox->settledUnknown($outbox->head('projects') ?? throw new LogicException('expected the create'));
+    $outbox->dismiss($parent->id);
+
+    $outbox->found(new EntityKey('team-1', 'projects', 'p'), 'p');
+
+    expect($outbox->requeue($child->id)?->operations[0]->value->value())->toBe('p');
+})->with(outboxStores());
+
+/** One parent found released a child still carrying the other parent's handle. */
+it('keeps a child blocked while any parent it needs is still unnamed', function (OutboxStore $store) {
+    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects', 'owner_id' => 'people']], []);
+    $project = $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+    $person = $outbox->queue(new EntityKey('team-1', 'people', 'u'), MutationKind::Create, [Op::set('t', 'u')], 0);
+    $child = $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p'), Op::set('owner_id', 'u')], 0);
+    foreach (['projects' => $project, 'people' => $person] as $type => $create) {
+        $outbox->settledUnknown($outbox->head($type) ?? throw new LogicException('expected '.$type));
+        $outbox->dismiss($create->id);
+    }
+
+    $outbox->found(new EntityKey('team-1', 'projects', 'p'), 'srv-p');
+
+    expect(fn () => $outbox->requeue($child->id))->toThrow(InvalidRequest::class);
+})->with(outboxStores());
+
+/** found() renames only a create this device gave up on - never a queued create under way, nor an id another tenant happens to share. */
+it('refuses found() for anything but an abandoned create of this device', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+
+    expect(fn () => $outbox->found(new EntityKey('team-1', 'projects', 'p'), 'srv'))->toThrow(InvalidRequest::class)
+        ->and(fn () => $outbox->found(new EntityKey('team-2', 'projects', '42'), 'srv'))->toThrow(InvalidRequest::class);
+})->with(outboxStores());
+
+/** Children a push abandoned before anyone knew their parent might exist are relabelled when it is dismissed as possibly landed. */
+it('relabels children already abandoned when their parent turns out to have maybe landed', function (OutboxStore $store) {
+    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects']], []);
+    $parent = $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+    $child = $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
+    $outbox->settledUnknown($outbox->head('projects') ?? throw new LogicException('expected the create'));
+    // As a push abandons it: looked at, never handed out.
+    $outbox->abandon($outbox->peek('tasks') ?? throw new LogicException('expected the child'), 'parent_abandoned', answered: false);
+
+    $outbox->dismiss($parent->id);
+
+    expect($outbox->abandoned()[0]['mutation']->id)->toBe($child->id)
+        ->and($outbox->abandoned()[0]['reason'])->toBe('parent_unknown')
+        ->and($outbox->mayHaveLanded($child->id))->toBeFalse();
+})->with(outboxStores());
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);

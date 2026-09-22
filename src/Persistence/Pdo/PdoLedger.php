@@ -142,6 +142,11 @@ class PdoLedger implements Ledger
 
     public function putReceipt(Receipt $receipt): void
     {
+        // The identity first: a duplicate of it collides with its position as
+        // well, and SQLite reports whichever constraint it checks first.
+        if ($this->scalar('SELECT 1 FROM sync_receipts WHERE mutation_id = ?', [$receipt->mutation->id]) !== null) {
+            throw new TransientFailure('Mutation identity already recorded');
+        }
         try {
             $this->run('INSERT INTO sync_receipts (mutation_id, space, commit_sequence, replica_id, sequence, payload) VALUES (?, ?, ?, ?, ?, ?)', [
                 $receipt->mutation->id, $this->space, $receipt->result->commitSequence?->value,
@@ -157,6 +162,13 @@ class PdoLedger implements Ledger
             // real duplicate.
             if (! in_array($exception->getCode(), ['23000', '23505'], true)) {
                 throw $exception;
+            }
+            if (str_contains($exception->getMessage(), 'stream_position') || str_contains($exception->getMessage(), 'sync_receipts.sequence')) {
+                // The position, not the identity: this stream's acknowledged
+                // sequence and its receipts disagree - a partial restore, a
+                // hand edit. Sending again meets the same row for ever, so it
+                // is not worth retrying; it needs someone to look.
+                throw new \LogicException(sprintf('Stream %s in space %s already has an answer at position %d although it is acknowledged below it: the stream and its receipts disagree.', $receipt->mutation->replica->id, $this->space, $receipt->mutation->sequence->value), previous: $exception);
             }
 
             throw new TransientFailure('Mutation identity already recorded', previous: $exception);

@@ -119,7 +119,26 @@ interface OutboxStore
      */
     public function abandonedOne(string $mutationId): ?array;
 
-    /** @return list<array{mutation: Mutation, reason: string}> */
+    /** Give an abandoned write a new reason. */
+    public function setReason(string $mutationId, string $reason): void;
+
+    /**
+     * The abandoned create for this record, if there is one - including one
+     * the application has dismissed, which abandoned() no longer lists but
+     * which still says its record was never named.
+     *
+     * @return array{mutation: Mutation, reason: string}|null
+     */
+    public function abandonedCreate(string $entityType, string $entityId): ?array;
+
+    /** Remove a write from the store altogether, whatever state it is in. */
+    public function forget(string $mutationId): void;
+
+    /**
+     * Abandoned writes still to be reported - not those dismissed.
+     *
+     * @return list<array{mutation: Mutation, reason: string}>
+     */
     public function abandoned(): array;
 
     /**

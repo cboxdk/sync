@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Cbox\Sync\Contracts\Ledger;
 use Cbox\Sync\Data\ConflictGroup;
 use Cbox\Sync\Data\EntityRecord;
+use Cbox\Sync\Data\FieldOperation;
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Data\MutationResult;
@@ -146,4 +147,39 @@ it('serves a bootstrap scan from the field index', function () {
 
     expect(array_map(fn ($record): string => $record->entity->id, $matched))->toBe(['a', 'c']);
     expect($scan(null))->toHaveCount(3);
+});
+
+/**
+ * Receipts from before they carried their position were never found by a
+ * position lookup, so a locking read inside a host transaction locked the gap
+ * where they would be - which can border another tenant's range.
+ */
+it('gives receipts from an earlier release their stream position on migrate', function () {
+    $pdo = new PDO('sqlite::memory:');
+    $store = new PdoStore($pdo);
+    $store->migrate();
+    $engine = new Engine($store);
+    $key = new EntityKey('team', 'notes', 'n1');
+    $engine->process(new Mutation('m1', $key, new Replica('device'), new MutationSequence(1), MutationKind::Create, new RecordVersion(0), [FieldOperation::set('title', 'a')]));
+    $pdo->exec('UPDATE sync_receipts SET replica_id = NULL, sequence = NULL');
+
+    $store->migrate();
+
+    expect($pdo->query("SELECT replica_id || ':' || sequence FROM sync_receipts WHERE mutation_id = 'm1'")->fetchColumn())->toBe('device:1');
+});
+
+/** A stream whose receipts and acknowledged position disagree met the same row on every retry, reported as worth retrying. */
+it('refuses a position that already has an answer as a disagreement, not as busy', function () {
+    $pdo = new PDO('sqlite::memory:');
+    $store = new PdoStore($pdo);
+    $store->migrate();
+    $engine = new Engine($store);
+    $key = new EntityKey('team', 'notes', 'n1');
+    $device = new Replica('device');
+    $engine->process(new Mutation('m1', $key, $device, new MutationSequence(1), MutationKind::Create, new RecordVersion(0), [FieldOperation::set('title', 'a')]));
+    // A partial restore: the stream forgot, the receipt did not.
+    $pdo->exec('UPDATE sync_streams SET acknowledged = 0');
+
+    expect(fn () => $engine->process(new Mutation('m2', new EntityKey('team', 'notes', 'n2'), $device, new MutationSequence(1), MutationKind::Create, new RecordVersion(0), [FieldOperation::set('title', 'b')])))
+        ->toThrow(LogicException::class, 'disagree');
 });

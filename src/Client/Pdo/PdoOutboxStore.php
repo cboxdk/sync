@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Cbox\Sync\Client\Pdo;
 
 use Cbox\Sync\Client\Contracts\OutboxStore;
+use Cbox\Sync\Client\Outbox;
 use Cbox\Sync\Data\Mutation;
+use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\Persistence\Pdo\Payload;
@@ -70,10 +72,12 @@ class PdoOutboxStore implements OutboxStore
             $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN numbered SMALLINT NOT NULL DEFAULT 0');
         }
         if (! in_array('sends', $columns, true)) {
-            $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN sends INTEGER NOT NULL DEFAULT 0');
             // An earlier release kept no record of its sendings, so any write
-            // already queued may have gone out without an answer.
-            $this->pdo->exec('UPDATE sync_outbox SET sends = 1');
+            // already queued may have gone out without an answer: one, by the
+            // column's own default, in the same statement that adds it - a
+            // crash between two statements left them at none. New writes are
+            // appended with an explicit zero.
+            $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN sends INTEGER NOT NULL DEFAULT 1');
         }
         // A write an earlier release sent and never heard back about carries
         // the placeholder number in its payload: that release numbered afresh
@@ -114,7 +118,7 @@ class PdoOutboxStore implements OutboxStore
         $position = (int) ($this->scalar('SELECT COALESCE(MAX(queued_at), 0) FROM sync_outbox', []) ?? '0') + 1;
 
         try {
-            $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, entity_id, queued_at, payload, abandoned_reason) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)', [
+            $this->run('INSERT INTO sync_outbox (mutation_id, replica_id, space, entity_type, entity_id, queued_at, payload, abandoned_reason, sends) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0)', [
                 $mutation->id, $mutation->replica->id, $mutation->entity->space, $mutation->entity->type, $mutation->entity->id, $position, Payload::encode($mutation),
             ]);
         } catch (\PDOException $exception) {
@@ -345,10 +349,32 @@ class PdoOutboxStore implements OutboxStore
         $this->run('DELETE FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NOT NULL', [$mutationId]);
     }
 
+    public function setReason(string $mutationId, string $reason): void
+    {
+        $this->run('UPDATE sync_outbox SET abandoned_reason = ? WHERE mutation_id = ? AND abandoned_reason IS NOT NULL', [$reason, $mutationId]);
+    }
+
+    public function abandonedCreate(string $entityType, string $entityId): ?array
+    {
+        foreach ($this->rows('SELECT payload, abandoned_reason FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NOT NULL ORDER BY queued_at, mutation_id', [$entityType, $entityId]) as [$payload, $reason]) {
+            $mutation = Payload::decode($payload, Mutation::class);
+            if ($mutation->kind === MutationKind::Create) {
+                return ['mutation' => $mutation, 'reason' => $reason];
+            }
+        }
+
+        return null;
+    }
+
+    public function forget(string $mutationId): void
+    {
+        $this->run('DELETE FROM sync_outbox WHERE mutation_id = ?', [$mutationId]);
+    }
+
     public function abandonedOne(string $mutationId): ?array
     {
-        $statement = $this->pdo->prepare('SELECT payload, abandoned_reason FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NOT NULL');
-        $statement->execute([$mutationId]);
+        $statement = $this->pdo->prepare('SELECT payload, abandoned_reason FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NOT NULL AND abandoned_reason NOT LIKE ?');
+        $statement->execute([$mutationId, Outbox::DISMISSED.'%']);
         $row = $statement->fetch(\PDO::FETCH_NUM);
         if (! is_array($row) || ! is_string($row[0] ?? null) || ! is_string($row[1] ?? null)) {
             return null;
@@ -359,7 +385,8 @@ class PdoOutboxStore implements OutboxStore
 
     public function abandoned(): array
     {
-        $statement = $this->pdo->prepare('SELECT payload, abandoned_reason FROM sync_outbox WHERE abandoned_reason IS NOT NULL ORDER BY queued_at, mutation_id');
+        $statement = $this->pdo->prepare('SELECT payload, abandoned_reason FROM sync_outbox WHERE abandoned_reason IS NOT NULL AND abandoned_reason NOT LIKE ? ORDER BY queued_at, mutation_id');
+        $statement->bindValue(1, Outbox::DISMISSED.'%');
         $statement->execute();
         $rows = [];
         foreach ($statement->fetchAll(\PDO::FETCH_NUM) as $row) {
