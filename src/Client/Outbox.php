@@ -660,10 +660,11 @@ class Outbox
     }
 
     /**
-     * The server answered this sending of the write - whatever it said. Only
-     * sendings that got no answer at all leave it possibly on the server; one
-     * answered "busy" or "sign in again" did not land, and counting it as if
-     * it might have blocked the requeue a user is entitled to.
+     * This sending of the write got an answer that proves it did not land -
+     * "sign in again", given before anything ran. Not for a "busy" answer: a
+     * gateway's timeout can look the same, and may follow a write that went
+     * through. Only sendings that got no such answer leave it possibly on the
+     * server.
      */
     public function answered(Mutation $mutation): void
     {
