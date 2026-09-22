@@ -63,6 +63,7 @@ class PdoOutboxStore implements OutboxStore
             $this->pdo->exec("ALTER TABLE sync_outbox ADD COLUMN entity_id $name NULL");
         }
         $this->index('sync_outbox_entity', 'sync_outbox', 'space, entity_type, entity_id');
+        $this->index('sync_outbox_record', 'sync_outbox', 'entity_type, entity_id');
         // What each handle this device created under became. Written in the
         // same transaction as the acknowledgement, so a crash cannot leave the
         // create gone and nothing that says what it was called.
@@ -251,6 +252,13 @@ class PdoOutboxStore implements OutboxStore
         }
 
         return $names;
+    }
+
+    public function queuedKey(string $entityType, string $entityId): ?EntityKey
+    {
+        $space = $this->scalar('SELECT space FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NULL ORDER BY queued_at LIMIT 1', [$entityType, $entityId]);
+
+        return $space === null ? null : new EntityKey($space, $entityType, $entityId);
     }
 
     public function queued(array $entityTypes): array

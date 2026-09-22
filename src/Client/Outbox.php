@@ -253,6 +253,12 @@ class Outbox
         }
     }
 
+    /** Where writes for this record are still queued, or null. */
+    public function queuedKey(string $entityType, string $entityId): ?EntityKey
+    {
+        return $this->store->queuedKey($entityType, $entityId);
+    }
+
     /** What a record this device created under a handle is actually called; null until the server has said. */
     public function nameOf(EntityKey $handle): ?EntityKey
     {

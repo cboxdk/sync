@@ -124,6 +124,12 @@ interface OutboxStore
     public function queued(array $entityTypes): array;
 
     /**
+     * Where a record this device still has queued writes for is queued - its
+     * key, space included - or null when nothing for it is queued.
+     */
+    public function queuedKey(string $entityType, string $entityId): ?EntityKey;
+
+    /**
      * @template TResult
      *
      * @param  \Closure(): TResult  $callback
