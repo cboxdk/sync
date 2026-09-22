@@ -128,9 +128,18 @@ class Outbox
      */
     public function take(string $mutationId): ?Mutation
     {
-        $mutation = $this->store->find($mutationId);
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $mutation = $this->store->find($mutationId);
+            if ($mutation === null) {
+                return null;
+            }
+            $handed = $this->handOut($mutation);
+            if ($handed !== null) {
+                return $handed;
+            }
+        }
 
-        return $mutation === null ? null : $this->handOut($mutation);
+        return null;
     }
 
     /**
@@ -163,6 +172,12 @@ class Outbox
             // read before would undo that, or send it twice.
             $mutation = $this->store->find($mutation->id);
             if ($mutation === null) {
+                return null;
+            }
+            if ($mutation->replica->id !== $stream->id || $mutation->entity->space !== $space) {
+                // Moved to another scope by another process since it was
+                // looked up: the lock and the counter taken are the old
+                // scope's. Asked again from the start.
                 return null;
             }
             $numbered = new Mutation(
@@ -204,14 +219,19 @@ class Outbox
             $changed = false;
 
             $parentType = $scopedBy[$type] ?? null;
-            $space = $parentType === null ? null : $this->store->namedAs($parentType, $mutation->entity->space);
+            $space = $parentType === null ? null : $this->nameOfOther($parentType, $mutation->entity->space);
             if ($space !== null && $space !== $mutation->entity->space) {
                 $this->store->relabel($type, $mutation->entity->space, $space);
                 $changed = true;
             }
             $current = $this->store->find($mutation->id) ?? $mutation;
 
-            $id = $mutation->kind === MutationKind::Create ? null : $this->store->namedAs($type, $current->entity->id);
+            // Its own record by the name given in ITS space: a handle is only
+            // unique within one, and another tenant's record of the same
+            // handle is not this one.
+            $id = $mutation->kind === MutationKind::Create || $this->queuedCreate($type, $current->entity->id) !== null
+                ? null
+                : $this->store->nameOf($current->entity)?->id;
             if ($id !== null && $id !== $current->entity->id) {
                 $this->store->rekey($current->entity, new EntityKey($current->entity->space, $type, $id));
                 $changed = true;
@@ -223,7 +243,7 @@ class Outbox
             foreach ($current->operations as $operation) {
                 $target = $references[$type][$operation->field] ?? null;
                 $value = $operation->value->exists ? $operation->value->value() : null;
-                $name = $target !== null && is_string($value) ? $this->store->namedAs($target, $value) : null;
+                $name = $target !== null && is_string($value) ? $this->nameOfOther($target, $value) : null;
                 if ($name !== null && $name !== $value) {
                     $operation = FieldOperation::set($operation->field, $name);
                     $rewritten = true;
@@ -237,6 +257,16 @@ class Outbox
 
             return $changed;
         });
+    }
+
+    /**
+     * The name a record this write points at became - unless a create for
+     * that handle is still queued, which makes it a NEW record reusing the
+     * handle, not the one named before.
+     */
+    private function nameOfOther(string $entityType, string $handle): ?string
+    {
+        return $this->queuedCreate($entityType, $handle) !== null ? null : $this->store->namedAs($entityType, $handle);
     }
 
     /** A create for this record still waiting to be sent, or null. */
@@ -441,10 +471,13 @@ class Outbox
         // deliveries can get the same answer, and the late one must not wind
         // back what the other has since sent.
         $this->store->transaction(function () use ($mutation, $acknowledgedSequence): void {
-            $this->store->resetAcknowledged($mutation->replica, $mutation->entity->space, $acknowledgedSequence, $mutation->sequence->value - 1);
             // The server has not got it at that number: it goes again under a
-            // new one.
-            $this->store->unmarkSent($mutation->id);
+            // new one. Only if this answer is still the current one - a late
+            // copy of it, arriving after the write went out again, must not
+            // take the newer attempt's number away from it.
+            if ($this->store->resetAcknowledged($mutation->replica, $mutation->entity->space, $acknowledgedSequence, $mutation->sequence->value - 1)) {
+                $this->store->unmarkSent($mutation->id);
+            }
         });
     }
 
@@ -547,13 +580,13 @@ class Outbox
                 // goes back under the name the server gave it.
                 $type = $old->entity->type;
                 $parentType = $scopedBy[$type] ?? null;
-                $space = $parentType === null ? $old->entity->space : ($this->store->namedAs($parentType, $old->entity->space) ?? $old->entity->space);
-                $id = $this->store->namedAs($type, $old->entity->id) ?? $old->entity->id;
+                $space = $parentType === null ? $old->entity->space : ($this->nameOfOther($parentType, $old->entity->space) ?? $old->entity->space);
+                $id = $this->store->nameOf($old->entity)->id ?? $old->entity->id;
                 $operations = [];
                 foreach ($old->operations as $operation) {
                     $target = $references[$type][$operation->field] ?? null;
                     $value = $operation->value->exists ? $operation->value->value() : null;
-                    $named = $target !== null && is_string($value) ? $this->store->namedAs($target, $value) : null;
+                    $named = $target !== null && is_string($value) ? $this->nameOfOther($target, $value) : null;
                     $operations[] = $named === null ? $operation : FieldOperation::set($operation->field, $named);
                 }
 

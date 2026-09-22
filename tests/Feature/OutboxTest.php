@@ -516,6 +516,92 @@ it('ignores a resume that arrives after the stream has moved on', function (Outb
     expect($outbox->head()?->sequence->value)->toBe(2);
 })->with(outboxStores());
 
+/**
+ * A late copy of a gap answer, arriving after the write went out again under
+ * its new number, used to clear that newer attempt's sent mark - and the write
+ * that had landed was later numbered afresh and refused as a reused identity.
+ */
+it('keeps a newer attempt\'s number when a late gap answer arrives', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $store->setAcknowledged($outbox->stream(note('a')), 'team-1', 3);
+    $stale = $outbox->head() ?? throw new LogicException('expected a head');
+
+    $outbox->resumeAfter($stale, 0);
+    $resent = $outbox->head() ?? throw new LogicException('expected the resend');
+    // Its answer is lost; then the late copy of the first gap arrives.
+    $outbox->resumeAfter($stale, 0);
+
+    expect($resent->sequence->value)->toBe(1)
+        ->and($store->isSent($resent->id))->toBeTrue()
+        ->and($outbox->head()?->sequence->value)->toBe(1);
+})->with(outboxStores());
+
+/**
+ * A handle is only unique within its space. Tenant B's update of its own
+ * `local-1` was rewritten to the name tenant A's `local-1` got, and applied to
+ * A's record.
+ */
+it('never takes another space\'s name for a record\'s own handle', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $a = new EntityKey('team-a', 'notes', 'local-1');
+    $b = new EntityKey('team-b', 'notes', 'local-1');
+    $outbox->queue($a, MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->acknowledged($outbox->head('notes', 'team-a') ?? throw new LogicException('expected a'), new EntityKey('team-a', 'notes', '42'));
+    $update = $outbox->queue($b, MutationKind::Update, [Op::set('t', 'b')], 3);
+
+    $outbox->mapNames($update, [], []);
+
+    expect($outbox->head('notes', 'team-b')?->entity->id)->toBe('local-1');
+})->with(outboxStores());
+
+/** A reference is not guessed between two spaces that named the same handle differently. */
+it('leaves a reference alone when the handle it names is ambiguous', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    foreach (['team-a' => '42', 'team-b' => '99'] as $space => $name) {
+        $outbox->queue(new EntityKey($space, 'projects', 'p'), MutationKind::Create, [Op::set('t', 'x')], 0);
+        $outbox->acknowledged($outbox->head('projects', $space) ?? throw new LogicException('expected a create'), new EntityKey($space, 'projects', $name));
+    }
+    $child = $outbox->queue(new EntityKey('team-a', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
+
+    $outbox->mapNames($child, ['tasks' => ['project_id' => 'projects']], []);
+
+    expect($outbox->head('tasks')?->operations[0]->value->value())->toBe('p');
+})->with(outboxStores());
+
+/** A handle reused for a new record still waiting to be created is that record, not the one named before. */
+it('does not point a reference at an old record when its handle is being created again', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'draft'), MutationKind::Create, [Op::set('t', 'old')], 0);
+    $outbox->acknowledged($outbox->head('projects') ?? throw new LogicException('expected a create'), new EntityKey('team-1', 'projects', '42'));
+    $outbox->queue(new EntityKey('team-1', 'projects', 'draft'), MutationKind::Create, [Op::set('t', 'new')], 0);
+    $child = $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'draft')], 0);
+
+    $outbox->mapNames($child, ['tasks' => ['project_id' => 'projects']], []);
+
+    expect($outbox->head('tasks')?->operations[0]->value->value())->toBe('draft');
+})->with(outboxStores());
+
+/**
+ * A write an earlier release sent and never heard back about carries the
+ * placeholder number 1 - that release numbered on every attempt. Trusting it
+ * resent the write as 1, a number the server had long given to another.
+ */
+it('numbers a write an earlier release left in flight the way that release would have', function () {
+    $pdo = new PDO('sqlite::memory:');
+    $store = new PdoOutboxStore($pdo);
+    $store->migrate();
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $store->setAcknowledged($outbox->stream(note('a')), 'team-1', 7);
+    // As the earlier release left it: flagged, payload still at placeholder 1.
+    $pdo->exec('UPDATE sync_outbox SET attempted = 1, numbered = 0');
+
+    $store->migrate();
+
+    expect($outbox->head()?->sequence->value)->toBe(8);
+});
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);

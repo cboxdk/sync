@@ -48,9 +48,13 @@ class InMemoryOutboxStore implements OutboxStore
         $this->queue[] = $mutation;
     }
 
+    /** @var array<string, array<string, array<string, string>>> type => handle => space => name */
+    private array $handles = [];
+
     public function rekey(EntityKey $from, EntityKey $to): void
     {
         $this->names[$from->key()] = $to;
+        $this->handles[$from->type][$from->id][$from->space] = $to->id;
         foreach ($this->queue as $index => $mutation) {
             if ($mutation->entity->equals($from)) {
                 $this->queue[$index] = $mutation->withEntity($to);
@@ -89,23 +93,22 @@ class InMemoryOutboxStore implements OutboxStore
         $this->acknowledged[$key] = max($sequence, $this->acknowledged[$key] ?? 0);
     }
 
-    public function resetAcknowledged(Replica $replica, string $space, int $sequence, int $expected): void
+    public function resetAcknowledged(Replica $replica, string $space, int $sequence, int $expected): bool
     {
         $key = self::stream($replica, $space);
-        if (($this->acknowledged[$key] ?? 0) === $expected) {
-            $this->acknowledged[$key] = $sequence;
+        if (($this->acknowledged[$key] ?? 0) !== $expected) {
+            return false;
         }
+        $this->acknowledged[$key] = $sequence;
+
+        return true;
     }
 
     public function namedAs(string $entityType, string $handle): ?string
     {
-        foreach ($this->names as $key => $name) {
-            if ($name->type === $entityType && $key === (new EntityKey($name->space, $entityType, $handle))->key()) {
-                return $name->id;
-            }
-        }
+        $names = array_unique($this->handles[$entityType][$handle] ?? []);
 
-        return null;
+        return count($names) === 1 ? reset($names) : null;
     }
 
     public function firstFor(string $entityType, string $entityId): ?Mutation

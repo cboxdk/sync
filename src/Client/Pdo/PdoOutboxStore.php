@@ -66,6 +66,15 @@ class PdoOutboxStore implements OutboxStore
         if (! in_array('attempted', $columns, true)) {
             $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN attempted SMALLINT NOT NULL DEFAULT 0');
         }
+        if (! in_array('numbered', $columns, true)) {
+            $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN numbered SMALLINT NOT NULL DEFAULT 0');
+        }
+        // A write an earlier release sent and never heard back about carries
+        // the placeholder number in its payload: that release numbered afresh
+        // on every attempt, and only flagged the row. Trusting that payload's
+        // number resent it as 1. Unflagged, it is numbered on its next send
+        // exactly as the earlier release would have numbered it.
+        $this->run('UPDATE sync_outbox SET attempted = 0 WHERE attempted = 1 AND numbered = 0', []);
         // Rows queued before the id column existed get it now, once, so
         // everything that finds a record's writes by id sees them too.
         foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE entity_id IS NULL', []) as [$id, $payload]) {
@@ -169,23 +178,42 @@ class PdoOutboxStore implements OutboxStore
 
     public function setAcknowledged(Replica $replica, string $space, int $sequence): void
     {
-        if ($this->scalar('SELECT 1 FROM sync_outbox_sequences WHERE replica_id = ? AND space = ?', [$replica->id, $space]) === null) {
-            $this->run('INSERT INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0)', [$replica->id, $space]);
-        }
+        // One statement that cannot fail on a race, and no plain read first:
+        // on MySQL that read would fix the transaction's snapshot before the
+        // stream lock is taken.
+        $this->run(match ($this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME)) {
+            'mysql' => 'INSERT IGNORE INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0)',
+            default => 'INSERT INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0) ON CONFLICT (replica_id, space) DO NOTHING',
+        }, [$replica->id, $space]);
         $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ? AND assigned < ?', [$sequence, $replica->id, $space, $sequence]);
     }
 
-    public function resetAcknowledged(Replica $replica, string $space, int $sequence, int $expected): void
+    public function resetAcknowledged(Replica $replica, string $space, int $sequence, int $expected): bool
     {
         $this->setAcknowledged($replica, $space, 0);
         // One statement, so the comparison and the write cannot be separated
         // by another delivery.
-        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ? AND assigned = ?', [$sequence, $replica->id, $space, $expected]);
+        $statement = $this->pdo->prepare('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ? AND assigned = ?');
+        $statement->execute([$sequence, $replica->id, $space, $expected]);
+        if ($statement->rowCount() > 0) {
+            return true;
+        }
+
+        // MySQL counts only rows it changed: setting it to what it already is
+        // matched, too.
+        return $sequence === $expected && $this->acknowledged($replica, $space) === $expected;
     }
 
     public function namedAs(string $entityType, string $handle): ?string
     {
-        return $this->scalar('SELECT name FROM sync_outbox_names WHERE entity_type = ? AND handle = ? LIMIT 1', [$entityType, $handle]);
+        $names = [];
+        foreach ($this->rows('SELECT space, name FROM sync_outbox_names WHERE entity_type = ? AND handle = ?', [$entityType, $handle]) as [, $name]) {
+            $names[] = $name;
+        }
+        $names = array_values(array_unique($names));
+
+        // Not array keys: a numeric name would come back an integer.
+        return count($names) === 1 ? $names[0] : null;
     }
 
     public function firstFor(string $entityType, string $entityId): ?Mutation
@@ -216,7 +244,7 @@ class PdoOutboxStore implements OutboxStore
 
     public function markSent(Mutation $numbered): void
     {
-        $this->run('UPDATE sync_outbox SET attempted = 1, payload = ? WHERE mutation_id = ?', [Payload::encode($numbered), $numbered->id]);
+        $this->run('UPDATE sync_outbox SET attempted = 1, numbered = 1, payload = ? WHERE mutation_id = ?', [Payload::encode($numbered), $numbered->id]);
     }
 
     public function unmarkSent(string $mutationId): void
@@ -359,7 +387,15 @@ class PdoOutboxStore implements OutboxStore
         }
         $this->active = true;
         try {
-            $this->pdo->exec($this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) === 'sqlite' ? 'BEGIN IMMEDIATE' : 'BEGIN');
+            $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'mysql') {
+                // Every read sees the latest commit. At MySQL's default a read
+                // before the stream lock fixed the snapshot, and a process
+                // waiting behind another's hand-out then missed the write that
+                // one had just sent and numbered a second write the same.
+                $this->pdo->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+            }
+            $this->pdo->exec($driver === 'sqlite' ? 'BEGIN IMMEDIATE' : 'BEGIN');
             try {
                 $result = $callback();
                 $this->pdo->exec('COMMIT');

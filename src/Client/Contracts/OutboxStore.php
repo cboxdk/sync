@@ -85,8 +85,10 @@ interface OutboxStore
      * device is AHEAD - a server restored from a backup - and a counter that
      * could only rise would resend the same number and get the same gap for
      * ever.
+     *
+     * @return bool whether it was still $expected, and so was set
      */
-    public function resetAcknowledged(Replica $replica, string $space, int $sequence, int $expected): void;
+    public function resetAcknowledged(Replica $replica, string $space, int $sequence, int $expected): bool;
 
     /**
      * The name the server gave a record this device created under a handle.
@@ -97,7 +99,12 @@ interface OutboxStore
      */
     public function nameOf(EntityKey $handle): ?EntityKey;
 
-    /** The name a handle of this type became, whatever space it was queued in. */
+    /**
+     * The name a handle of this type became, whatever space it was queued in -
+     * for a reference, which may point into another scope. Null when two
+     * spaces gave the same handle different names: guessing between them
+     * would point a write at another tenant's record.
+     */
     public function namedAs(string $entityType, string $handle): ?string;
 
     public function acknowledge(string $mutationId): void;

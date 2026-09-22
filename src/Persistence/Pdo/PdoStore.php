@@ -72,7 +72,11 @@ class PdoStore implements Store
         // Before the space row is created: MySQL's INSERT IGNORE would store
         // an over-long or malformed name truncated, as a different space.
         Identifier::check($space, 'space');
-        $this->ensureSpace($space);
+        try {
+            $this->ensureSpace($space);
+        } catch (\PDOException $failure) {
+            throw self::isContention($failure) ? new TransientFailure('The space is busy; retry the same mutation', previous: $failure) : $failure;
+        }
         $this->active = true;
         try {
             try {
