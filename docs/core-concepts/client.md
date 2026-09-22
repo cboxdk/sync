@@ -81,5 +81,10 @@ Getting any of those wrong is silent data loss or a permanently wedged
 queue, which is why they are implemented once here rather than in each
 application. Abandoned mutations are kept with their reason and must be
 surfaced: nothing else will tell the user that a write is never going to land.
+A create that may have landed and is dismissed takes the writes that need it
+along as `parent_unknown`. Find the record on the server, tell the outbox what it
+is called with `found($handle, $name)`, then requeue them; `requeue()` refuses
+until a name has been applied.
+
 Do not offer to requeue a `receipt_pruned` write without asking: it may already
 be on the server, and sending it again under a new identity applies it twice.

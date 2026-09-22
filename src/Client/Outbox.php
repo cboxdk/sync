@@ -471,6 +471,32 @@ class Outbox
         }
     }
 
+    /**
+     * Record the name a record created on this device turned out to have -
+     * one whose create may have landed but whose answer never came, found on
+     * the server by the application. Queued writes are moved to it and their
+     * references rewritten, exactly as when the server names it, and writes
+     * abandoned as parent_unknown can then be requeued under it.
+     *
+     * @param  array<string, array<string, string>>|null  $references  as for acknowledged(); null for what relatedBy() set
+     * @param  array<string, string>|null  $scopedBy  as for acknowledged(); null for what relatedBy() set
+     */
+    public function found(EntityKey $handle, string $name, ?array $references = null, ?array $scopedBy = null): void
+    {
+        $references ??= $this->references;
+        $scopedBy ??= $this->scopedBy;
+        $named = new EntityKey($handle->space, $handle->type, $name);
+        $this->store->transaction(function () use ($handle, $named, $references, $scopedBy): void {
+            $this->store->rekey($handle, $named);
+            $this->rewriteReferences($handle, $named->id, $references);
+            foreach ($scopedBy as $type => $parentType) {
+                if ($parentType === $handle->type) {
+                    $this->store->relabel($type, $handle->id, $named->id);
+                }
+            }
+        });
+    }
+
     /** Where writes for this record are still queued, or null. */
     public function queuedKey(string $entityType, string $entityId): ?EntityKey
     {
@@ -681,14 +707,24 @@ class Outbox
                 $space = $parentType === null ? $old->entity->space : ($this->nameOfOther($parentType, $old->entity->space) ?? $old->entity->space);
                 $id = $this->store->nameOf($old->entity)->id ?? $old->entity->id;
                 $operations = [];
+                $mapped = false;
                 foreach ($old->operations as $operation) {
                     $target = $references[$type][$operation->field] ?? null;
                     $value = $operation->value->exists ? $operation->value->value() : null;
                     $named = $target !== null && is_string($value) ? $this->nameOfOther($target, $value) : null;
+                    $mapped = $mapped || ($named !== null && $named !== $value);
                     $operations[] = $named === null ? $operation : FieldOperation::set($operation->field, $named);
                 }
 
-                return $this->append(new EntityKey($space, $type, $id), $old->kind, $operations, $old->baseVersion->value, $old->atomic, $old->resolution, null);
+                $key = new EntityKey($space, $type, $id);
+                if ($entry['reason'] === 'parent_unknown' && ! $evenIfItMayHaveLanded && $key->equals($old->entity) && ! $mapped) {
+                    // Its parent may exist, but no name for it has been given:
+                    // sent now, it would carry the handle the server never
+                    // heard of. Record the name with found() first.
+                    throw new InvalidRequest(sprintf('Write %s needs a record whose name is not known yet; record it with found() and requeue again.', $mutationId));
+                }
+
+                return $this->append($key, $old->kind, $operations, $old->baseVersion->value, $old->atomic, $old->resolution, null);
             }
 
             return null;

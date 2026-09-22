@@ -786,6 +786,27 @@ it('counts a write queued before sendings were recorded as possibly sent', funct
     expect($store->unanswered('m1'))->toBe(1);
 });
 
+/**
+ * A child abandoned as parent_unknown was requeued as it was, and went out
+ * carrying the handle of a parent the server knows by another name - or not at
+ * all. It waits until the application records what the parent was called.
+ */
+it('requeues a parent_unknown child only once its parent\'s name is found', function (OutboxStore $store) {
+    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects']], []);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+    $child = $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
+    $create = $outbox->head('projects') ?? throw new LogicException('expected the create');
+    $outbox->settledUnknown($create);
+    $outbox->dismiss($create->id);
+
+    expect(fn () => $outbox->requeue($child->id))->toThrow(InvalidRequest::class);
+
+    $outbox->found(new EntityKey('team-1', 'projects', 'p'), 'srv-42');
+    $requeued = $outbox->requeue($child->id);
+
+    expect($requeued?->operations[0]->value->value())->toBe('srv-42');
+})->with(outboxStores());
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
