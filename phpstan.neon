@@ -1,5 +1,10 @@
+includes:
+    - vendor/phpstan/phpstan-strict-rules/rules.neon
+
 parameters:
-    level: max
+    # 10, not max: max moves with every PHPStan release and would turn a
+    # routine dependency update into a red build.
+    level: 10
     paths:
         - src
         - tests/Fixtures

@@ -115,7 +115,9 @@ foreach ($seeds as $seed) {
         $result = $engine->process($mutation);
         // Lose the first response and resend exactly the same request.
         foreach (range(1, $random->getInt(1, 4)) as $_) {
-            verify($engine->process($mutation) == $result, 'Retry changed the persisted result');
+            // Structural equality on purpose: a replay rebuilds the result
+            // from storage, so it is an equal object, never the same one.
+            verify(serialize($engine->process($mutation)) === serialize($result), 'Retry changed the persisted result');
             $retries++;
         }
     }

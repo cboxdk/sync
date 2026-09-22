@@ -11,7 +11,8 @@
     "require-dev": {
         "laravel/pint": "^1.32",
         "pestphp/pest": "^5.2",
-        "phpstan/phpstan": "^2.2"
+        "phpstan/phpstan": "^2.2",
+        "phpstan/phpstan-strict-rules": "^2.0"
     },
     "autoload": {
         "psr-4": {
@@ -45,13 +46,15 @@
             "@test:sqlite",
             "@test:client",
             "@license-check",
-            "@security-audit"
+            "@security-audit",
+            "@docs:lint"
         ],
         "security-audit": "@composer audit --locked",
         "docs:requirements": "@php bin/generate-requirements.php",
         "test:rehydrating": "SYNC_STORE=rehydrating pest",
         "test:sqlite": "SYNC_STORE=sqlite pest",
         "concurrency": "@php bin/concurrency.php",
-        "test:client": "SYNC_CLIENT=sqlite pest"
+        "test:client": "SYNC_CLIENT=sqlite pest",
+        "docs:lint": "@php bin/lint-docs.php"
     }
 }

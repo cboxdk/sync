@@ -1,7 +1,7 @@
 {
     "bomFormat": "CycloneDX",
     "specVersion": "1.5",
-    "serialNumber": "urn:uuid:6715b157-9c07-5d55-938e-6edd8439f4fb",
+    "serialNumber": "urn:uuid:26d90a9b-1333-510e-9048-aae5635e022e",
     "version": 1,
     "metadata": {
         "component": {
@@ -535,6 +535,31 @@
                 {
                     "type": "vcs",
                     "url": "https://github.com/phpstan/phpdoc-parser.git"
+                }
+            ]
+        },
+        {
+            "type": "library",
+            "bom-ref": "pkg:composer/phpstan/phpstan-strict-rules@2.0.12",
+            "group": "phpstan",
+            "name": "phpstan-strict-rules",
+            "version": "2.0.12",
+            "scope": "optional",
+            "purl": "pkg:composer/phpstan/phpstan-strict-rules@2.0.12",
+            "description": "Extra strict and opinionated rules for PHPStan",
+            "licenses": [
+                {
+                    "expression": "MIT"
+                }
+            ],
+            "externalReferences": [
+                {
+                    "type": "distribution",
+                    "url": "https://api.github.com/repos/phpstan/phpstan-strict-rules/zipball/2bc5ae19ae965663b62ac907ee6342c3903ec93b"
+                },
+                {
+                    "type": "vcs",
+                    "url": "https://github.com/phpstan/phpstan-strict-rules.git"
                 }
             ]
         },

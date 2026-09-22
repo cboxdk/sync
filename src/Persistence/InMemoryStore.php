@@ -145,7 +145,9 @@ class InMemoryStore implements Inspectable, Store
      */
     private static function compareKeys(EntityKey $left, EntityKey $right): int
     {
-        return strcmp($left->type, $right->type) ?: strcmp($left->id, $right->id);
+        $byType = strcmp($left->type, $right->type);
+
+        return $byType !== 0 ? $byType : strcmp($left->id, $right->id);
     }
 
     public function record(EntityKey $entity): ?EntityRecord

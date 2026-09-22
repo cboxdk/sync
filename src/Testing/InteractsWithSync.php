@@ -47,10 +47,10 @@ trait InteractsWithSync
      */
     protected function syncStore(): Store
     {
-        return match (getenv('SYNC_STORE') ?: 'memory') {
+        return match (Environment::get('SYNC_STORE', 'memory')) {
             'rehydrating' => new RehydratingStore,
             'sqlite' => self::freshSqliteStore(),
-            'pdo' => self::pdoStore((string) (getenv('SYNC_DSN') ?: ''), (string) (getenv('SYNC_DB_USER') ?: ''), (string) (getenv('SYNC_DB_PASSWORD') ?: '')),
+            'pdo' => self::pdoStore(Environment::get('SYNC_DSN'), Environment::get('SYNC_DB_USER'), Environment::get('SYNC_DB_PASSWORD')),
             default => new InMemoryStore,
         };
     }

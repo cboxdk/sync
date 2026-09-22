@@ -136,8 +136,11 @@ class Engine
             $ledger->acknowledge($mutation->replica, $mutation->sequence->value);
             $changes = [];
             if ($ledger->recordChanged($mutation->entity)) {
-                $after = $ledger->record($mutation->entity);
-                $changes[] = new Change(count($changes), $after?->deleted ? ChangeKind::Deleted : ChangeKind::Record, record: $after, previousRecord: $record, provenance: $origin);
+                // A record reported changed is in the ledger; a Change of kind
+                // Record carrying no record would be a feed entry a reader
+                // cannot apply.
+                $after = $ledger->record($mutation->entity) ?? throw new \LogicException('A changed record is missing from the ledger');
+                $changes[] = new Change(count($changes), $after->deleted ? ChangeKind::Deleted : ChangeKind::Record, record: $after, previousRecord: $record, provenance: $origin);
             }
             foreach ($ledger->touchedGroups() as $group) {
                 $changes[] = new Change(count($changes), ChangeKind::Conflict, group: $group, provenance: $origin);

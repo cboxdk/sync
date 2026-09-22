@@ -18,7 +18,7 @@ class ClientStateFactory
 {
     public static function make(): ClientState
     {
-        if ((getenv('SYNC_CLIENT') ?: 'memory') !== 'sqlite') {
+        if (Environment::get('SYNC_CLIENT', 'memory') !== 'sqlite') {
             return new InMemoryClientState;
         }
         $state = new PdoClientState(new \PDO('sqlite::memory:'));

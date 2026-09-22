@@ -18,14 +18,14 @@ class FailingStoreFactory
 {
     public static function make(): Store
     {
-        if ((getenv('SYNC_STORE') ?: 'memory') === 'memory' || (getenv('SYNC_STORE') ?: '') === 'rehydrating') {
+        if (in_array(Environment::get('SYNC_STORE', 'memory'), ['memory', 'rehydrating'], true)) {
             return new FailingStore;
         }
 
-        $dsn = (string) (getenv('SYNC_DSN') ?: '');
+        $dsn = Environment::get('SYNC_DSN');
         $store = $dsn === ''
             ? new FailingPdoStore(new \PDO('sqlite::memory:'))
-            : new FailingPdoStore(new \PDO($dsn, (string) (getenv('SYNC_DB_USER') ?: ''), (string) (getenv('SYNC_DB_PASSWORD') ?: '')));
+            : new FailingPdoStore(new \PDO($dsn, Environment::get('SYNC_DB_USER'), Environment::get('SYNC_DB_PASSWORD')));
         $store->migrate();
 
         return $store;

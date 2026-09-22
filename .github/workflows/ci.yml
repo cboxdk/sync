@@ -64,6 +64,9 @@ jobs:
       - name: Audit locked dependencies
         run: composer security-audit
 
+      - name: Check documentation examples parse
+        run: php bin/lint-docs.php
+
       - name: Check dependency licenses
         run: composer license-check
 
