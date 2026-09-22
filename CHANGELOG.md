@@ -11,12 +11,14 @@
 ### Fixed
 
 - **A device's numbering could disagree with the server's.** Each entity type and space a device writes to is now its own replica stream. The server numbers per replica per space and maps types and scopes to spaces by rules the device cannot see; one stream per (type, space) keeps both sides counting the same thing, where a single lost response used to make a write collide and be abandoned for good.
-- **A device ahead of the server could never push again.** `resumeAfter()` now sets the acknowledgement exactly, downward too - a gap is only reported when the server is behind, after a restore. Ordinary acknowledgements still only rise, so two overlapping deliveries cannot wind the counter back.
+- **A device out of step with the server after a restore could never push again.** A server restored from a backup answered every write with the same gap; `resumeAfter()` now sets the acknowledgement exactly, downward too, and only if the counter is still where that attempt numbered from. A device restored from a backup reused numbers the server held and had every write refused as a protocol violation; a new identity on a used number is now answered as a gap with reason `sequence_behind`, and the writer renumbers upward. Ordinary acknowledgements still only rise.
+- **A dependency pruned with the log refused the dependent write.** It is treated as no knowledge now: the write is judged on its own base.
 - **Acknowledging a create and renaming what is queued behind it are one transaction.** A crash between them used to leave updates addressed to a handle nothing could resolve.
 - **MySQL treated `a` and `a ` as the same identifier.** `utf8mb4_bin` pads with spaces, and a mutation id differing only by a trailing space was answered with another mutation's receipt. Identity columns use `utf8mb4_0900_bin`, and `migrate()` retypes older installations. MySQL 8.0.17 or later is required.
 - **One oversized identifier could stop every bootstrap of its view.** Identifiers are capped at 150 characters - what the columns hold - and may not contain NUL, in `EntityKey`, `Replica` and `Mutation`, so every entry point inherits it.
 - **A preserved candidate skipped the value checks.** A conflict leaves the record unchanged, so the validator never saw the value being kept. The record is now also validated as it would be if the candidate were chosen.
-- **Receipts grew without bound.** `prune()` drops the receipts written in the commits it removes.
+- **Receipts grew without bound.** `prune()` drops the receipts written in the commits it removes. A replay older than the horizon is answered as a gap and applies nothing.
+- A truncated deflate payload is refused instead of decoding to a prefix.
 - A change could be recorded as a `Record` carrying no record; found by the strict analysis rules.
 
 ### Performance
@@ -26,8 +28,8 @@
 
 ### Upgrading
 
-- Run `migrate()`: it adds `sync_receipts.commit_sequence` and retypes MySQL identity columns.
-- **Drain device queues before upgrading the client side if you can.** The replica identity a device sends now names its stream. A write sent before the upgrade whose response was lost is refused as reused on retry after it, and reported abandoned although it landed.
+- Run `migrate()`: it adds `sync_receipts.commit_sequence` and retypes MySQL identity columns. **On a large MySQL installation, run it in a maintenance window**: the collation change copies each table with writes blocked, once per table.
+- A device keeps sending writes queued before the upgrade on the stream they were queued on, so their retries and `depends_on` still match. `OutboxStore` implementations outside this package need the new methods, and the PDO outbox gains an `entity_id` column in place.
 - Format-2 payloads cannot be read by 0.8.x; a downgrade after writing is refused by name.
 
 ## 0.8.0 - 2026-09-21
