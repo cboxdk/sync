@@ -60,10 +60,17 @@ interface Ledger
     public function appendCommit(CommitSequence $sequence, array $changes): Commit;
 
     /**
-     * One level of nesting over records and groups only, so a blocked domain
-     * mutation can be discarded while its receipt, acknowledgement and commit
-     * are still published. A durable implementation uses a savepoint, which
-     * keeps staged writes visible to a validator sharing the transaction.
+     * One level of nesting, so a blocked domain mutation can be discarded while
+     * its receipt, acknowledgement and commit are still published. The engine
+     * writes those three only after the draft is committed or rolled back, so a
+     * rollback covers exactly the records and groups staged inside it.
+     *
+     * A durable implementation uses a savepoint, which keeps staged writes
+     * visible to a validator sharing the transaction - and rolls back anything
+     * else written on that connection since, too. A validator must therefore
+     * only read: a write it makes survives a rollback in memory and vanishes
+     * with one on a database, and no host wants behaviour that depends on
+     * which store it runs.
      */
     public function beginDraft(): void;
 

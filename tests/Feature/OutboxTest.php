@@ -10,6 +10,7 @@ use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\ValueObjects\EntityKey;
+use Cbox\Sync\ValueObjects\RecordVersion;
 use Cbox\Sync\ValueObjects\Replica;
 
 function outboxStores(): array
@@ -223,4 +224,129 @@ it('refuses to re-queue an identity it abandoned', function (OutboxStore $store)
     $outbox->abandon($mutation, 'forbidden');
 
     expect(fn () => $store->append($mutation))->toThrow(InvalidRequest::class);
+})->with(outboxStores());
+
+/**
+ * The answer to pull_required. The rebased write keeps its identity and its
+ * place: the server stored nothing for the first attempt, so it is still the
+ * write the server is waiting for, and anything queued behind it stays behind.
+ */
+it('puts a rebased mutation in place of the original', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $key = new EntityKey('team-1', 'tasks', 'one');
+    $first = $outbox->queue($key, MutationKind::Update, [Op::set('title', 'mine'), Op::set('body', 'b')], 1);
+    $outbox->queue($key, MutationKind::Update, [Op::set('body', 'later')], 1);
+
+    $head = $outbox->head();
+    expect($head)->not->toBeNull();
+    $outbox->rebase($head, new RecordVersion(4), [Op::set('title', 'merged')]);
+
+    $again = $outbox->head();
+    expect($again?->id)->toBe($first->id)
+        ->and($again?->baseVersion->value)->toBe(4)
+        ->and($again?->sequence->value)->toBe(1)
+        ->and(array_map(fn (Op $op): string => $op->field.'='.$op->value->value(), $again->operations ?? []))->toBe(['title=merged'])
+        ->and($outbox->pending())->toBe(2);
+})->with(outboxStores());
+
+it('rebases nothing that has already left the queue', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $key = new EntityKey('team-1', 'tasks', 'one');
+    $outbox->queue($key, MutationKind::Update, [Op::set('title', 'mine')], 1);
+    $head = $outbox->head();
+    expect($head)->not->toBeNull();
+    $outbox->acknowledged($head);
+
+    $outbox->rebase($head, new RecordVersion(4), []);
+
+    expect($outbox->pending())->toBe(0)->and($outbox->head())->toBeNull();
+})->with(outboxStores());
+
+/**
+ * The server numbers per replica per ITS space, and maps type and scope to a
+ * space by rules this device cannot see. So each (type, space) this device
+ * writes to travels on its own replica identity: whatever the mapping, one
+ * device stream meets exactly one server stream.
+ */
+it('gives every type and space its own stream', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('t', 't')], 0);
+    $outbox->queue(new EntityKey('team-1', 'notes', 'n'), MutationKind::Create, [Op::set('t', 'n')], 0);
+    $outbox->queue(new EntityKey('p1', 'notes', 'p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+
+    $tasks = $outbox->head('tasks', 'team-1');
+    $notes = $outbox->head('notes', 'team-1');
+    $other = $outbox->head('notes', 'p1');
+
+    $streams = array_map(fn ($m) => $m?->replica->id, [$tasks, $notes, $other]);
+    expect(array_unique($streams))->toHaveCount(3)
+        ->and($tasks?->sequence->value)->toBe(1)
+        ->and($notes?->sequence->value)->toBe(1)
+        ->and($other?->sequence->value)->toBe(1)
+        // Stable across calls and bounded, because the server stores it.
+        ->and($outbox->stream(new EntityKey('team-1', 'tasks', 'x'))->id)->toBe($tasks?->replica->id)
+        ->and(strlen((string) $tasks?->replica->id))->toBeLessThan(40);
+})->with(outboxStores());
+
+/** A push names a scope, and must not send another tenant's queued work under it. */
+it('hands out only the space that was asked for', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-2', 'tasks', 'elsewhere'), MutationKind::Create, [Op::set('t', 'x')], 0);
+    $outbox->queue(new EntityKey('team-1', 'tasks', 'here'), MutationKind::Create, [Op::set('t', 'y')], 0);
+
+    expect($outbox->head('tasks', 'team-1')?->entity->id)->toBe('here')
+        ->and($outbox->head('tasks', 'team-2')?->entity->id)->toBe('elsewhere')
+        ->and($outbox->head('tasks', 'team-3'))->toBeNull();
+})->with(outboxStores());
+
+/**
+ * A gap is only reported when this device is ahead of the server: a server
+ * restored from a backup, say. A counter that could only rise would send the
+ * same number, get the same gap, and never push again.
+ */
+it('numbers downward when the server turns out to be behind', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    for ($i = 0; $i < 5; $i++) {
+        $outbox->queue(note('n'.$i), MutationKind::Create, [Op::set('t', 'x')], 0);
+        $outbox->acknowledged($outbox->head() ?? throw new LogicException('expected a head'));
+    }
+    $outbox->queue(note('late'), MutationKind::Create, [Op::set('t', 'x')], 0);
+    expect($outbox->head()?->sequence->value)->toBe(6);
+
+    $outbox->resumeAfter($outbox->head() ?? throw new LogicException('expected a head'), 2);
+
+    expect($outbox->head()?->sequence->value)->toBe(3);
+})->with(outboxStores());
+
+/**
+ * A refusal about the moment, not the write - an expired session, a permission
+ * granted since. The write goes again under a new identity, because the server
+ * may hold a receipt for the old one.
+ */
+it('queues an abandoned write again as a new write', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Update, [Op::set('t', 'mine')], 3);
+    $abandoned = $outbox->head() ?? throw new LogicException('expected a head');
+    $outbox->abandon($abandoned, 'unauthenticated');
+
+    $again = $outbox->requeue($abandoned->id);
+
+    expect($again)->not->toBeNull()
+        ->and($again?->id)->not->toBe($abandoned->id)
+        ->and($outbox->abandoned())->toBe([])
+        ->and($outbox->head()?->id)->toBe($again?->id)
+        ->and($outbox->head()?->baseVersion->value)->toBe(3)
+        ->and($outbox->head()?->operations[0]->value->value())->toBe('mine')
+        ->and($outbox->requeue('no-such-write'))->toBeNull();
+})->with(outboxStores());
+
+it('stops reporting an abandoned write once it is dismissed', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->abandon($outbox->head() ?? throw new LogicException('expected a head'), 'forbidden');
+    $id = $outbox->abandoned()[0]['mutation']->id;
+
+    $outbox->dismiss($id);
+
+    expect($outbox->abandoned())->toBe([])->and($outbox->pending())->toBe(0);
 })->with(outboxStores());

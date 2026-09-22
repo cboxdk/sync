@@ -108,3 +108,33 @@ it('does not validate a mutation the resolver rejected', function () {
     expect($result->status)->toBe(MutationStatus::Rejected);
     expect($validator->sawMutations)->not->toContain('device-b');
 });
+
+/** Refuses any record whose title is "forbidden" - a rule about the value, not the caller. */
+final class ForbiddenTitle implements EntityValidator
+{
+    public function validate(ValidationContext $context): ValidationResult
+    {
+        return $context->proposed->value('title')->value() === 'forbidden'
+            ? new ValidationResult([new ValidationFailure('bad_title', 'No', 'title')])
+            : new ValidationResult;
+    }
+}
+
+/**
+ * A conflict leaves the record unchanged, so validating only the record never
+ * saw the value being preserved. That let a value the host forbids wait in a
+ * group for someone to pick.
+ */
+it('validates the value a conflict would preserve, not only the record', function () {
+    $store = $this->syncStore();
+    $engine = new Engine($store, new PreserveConflict, validator: new ForbiddenTitle);
+    $key = new EntityKey('test', 'notes', 'one');
+    conflictingPair($engine, $key);
+
+    $result = $engine->process(new Mutation('device-b', $key, new Replica('b'), new MutationSequence(1), MutationKind::Update, new RecordVersion(1), [
+        Op::set('title', 'forbidden'),
+    ]));
+
+    expect($result->status)->toBe(MutationStatus::ValidationFailed)
+        ->and($store->openGroups($key))->toBe([]);
+});

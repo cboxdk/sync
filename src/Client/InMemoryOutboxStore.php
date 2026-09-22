@@ -51,10 +51,19 @@ class InMemoryOutboxStore implements OutboxStore
         }
     }
 
-    public function head(?string $entityType = null): ?Mutation
+    public function replace(Mutation $mutation): void
+    {
+        foreach ($this->queue as $index => $queued) {
+            if ($queued->id === $mutation->id) {
+                $this->queue[$index] = $mutation;
+            }
+        }
+    }
+
+    public function head(?string $entityType = null, ?string $space = null): ?Mutation
     {
         foreach ($this->queue as $mutation) {
-            if ($entityType === null || $mutation->entity->type === $entityType) {
+            if (($entityType === null || $mutation->entity->type === $entityType) && ($space === null || $mutation->entity->space === $space)) {
                 return $mutation;
             }
         }
@@ -70,7 +79,7 @@ class InMemoryOutboxStore implements OutboxStore
     public function setAcknowledged(Replica $replica, string $space, int $sequence): void
     {
         $key = self::stream($replica, $space);
-        $this->acknowledged[$key] = max($sequence, $this->acknowledged[$key] ?? 0);
+        $this->acknowledged[$key] = $sequence;
     }
 
     private static function stream(Replica $replica, string $space): string
@@ -96,6 +105,14 @@ class InMemoryOutboxStore implements OutboxStore
     public function abandoned(): array
     {
         return $this->abandoned;
+    }
+
+    public function dismiss(string $mutationId): void
+    {
+        $this->abandoned = array_values(array_filter(
+            $this->abandoned,
+            fn (array $entry): bool => $entry['mutation']->id !== $mutationId,
+        ));
     }
 
     public function pending(?string $entityType = null): int

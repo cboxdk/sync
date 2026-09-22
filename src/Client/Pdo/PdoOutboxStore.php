@@ -30,7 +30,7 @@ class PdoOutboxStore implements OutboxStore
     {
         $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
         $text = $driver === 'mysql' ? 'LONGTEXT' : 'TEXT';
-        $name = $driver === 'mysql' ? 'VARCHAR(150) COLLATE utf8mb4_bin' : 'TEXT';
+        $name = $driver === 'mysql' ? 'VARCHAR(150) COLLATE utf8mb4_0900_bin' : 'TEXT';
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS sync_outbox (
             mutation_id $name NOT NULL,
             replica_id $name NOT NULL,
@@ -52,6 +52,8 @@ class PdoOutboxStore implements OutboxStore
         // queueing is O(n) per write and a long offline session gets slower the
         // longer it lasts.
         $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_position ON sync_outbox (queued_at)');
+        // A push drains one type in one space.
+        $this->pdo->exec('CREATE INDEX IF NOT EXISTS sync_outbox_stream ON sync_outbox (entity_type, space, queued_at, mutation_id)');
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS sync_outbox_sequences (
             replica_id $name NOT NULL,
             space $name NOT NULL,
@@ -101,13 +103,24 @@ class PdoOutboxStore implements OutboxStore
         }
     }
 
-    public function head(?string $entityType = null): ?Mutation
+    public function replace(Mutation $mutation): void
+    {
+        $this->run('UPDATE sync_outbox SET payload = ? WHERE mutation_id = ? AND abandoned_reason IS NULL', [
+            Payload::encode($mutation), $mutation->id,
+        ]);
+    }
+
+    public function head(?string $entityType = null, ?string $space = null): ?Mutation
     {
         $sql = 'SELECT payload FROM sync_outbox WHERE abandoned_reason IS NULL';
         $bindings = [];
         if ($entityType !== null) {
             $sql .= ' AND entity_type = ?';
             $bindings[] = $entityType;
+        }
+        if ($space !== null) {
+            $sql .= ' AND space = ?';
+            $bindings[] = $space;
         }
         $payload = $this->scalar($sql.' ORDER BY queued_at, mutation_id LIMIT 1', $bindings);
 
@@ -124,7 +137,7 @@ class PdoOutboxStore implements OutboxStore
         if ($this->scalar('SELECT 1 FROM sync_outbox_sequences WHERE replica_id = ? AND space = ?', [$replica->id, $space]) === null) {
             $this->run('INSERT INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0)', [$replica->id, $space]);
         }
-        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ? AND assigned < ?', [$sequence, $replica->id, $space, $sequence]);
+        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ?', [$sequence, $replica->id, $space]);
     }
 
     public function acknowledge(string $mutationId): void
@@ -135,6 +148,11 @@ class PdoOutboxStore implements OutboxStore
     public function abandon(string $mutationId, string $reason): void
     {
         $this->run('UPDATE sync_outbox SET abandoned_reason = ? WHERE mutation_id = ?', [$reason, $mutationId]);
+    }
+
+    public function dismiss(string $mutationId): void
+    {
+        $this->run('DELETE FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NOT NULL', [$mutationId]);
     }
 
     public function abandoned(): array

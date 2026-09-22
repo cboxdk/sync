@@ -29,6 +29,7 @@ use Cbox\Sync\Enums\ChangeKind;
 use Cbox\Sync\Enums\ConflictDecision;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Enums\MutationStatus;
+use Cbox\Sync\Enums\OnConflict;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Observers\NullCommitObserver;
@@ -43,10 +44,16 @@ class Engine
 {
     public function __construct(private Store $store, private ConflictResolver $resolver = new PreserveConflict, private IdGenerator $ids = new UuidV7Generator, private EntityValidator $validator = new AcceptAll, private CommitObserver $observer = new NullCommitObserver) {}
 
-    public function process(Mutation $mutation, AdapterContext $context = new AdapterContext): MutationResult
+    /**
+     * @param  OnConflict  $onConflict  how the writer wants a conflict the resolver would
+     *                                  preserve to be handled. Not part of the mutation's
+     *                                  identity: a refusal stores nothing, so the same
+     *                                  mutation may come back rebased on newer knowledge.
+     */
+    public function process(Mutation $mutation, AdapterContext $context = new AdapterContext, OnConflict $onConflict = OnConflict::Resolve): MutationResult
     {
         $committed = null;
-        $result = $this->store->transaction($mutation->entity->space, function (Ledger $ledger) use ($mutation, $context, &$committed): MutationResult {
+        $result = $this->store->transaction($mutation->entity->space, function (Ledger $ledger) use ($mutation, $context, $onConflict, &$committed): MutationResult {
             $receipt = $ledger->receipt($mutation->id);
             if ($receipt !== null) {
                 if ($receipt->mutation->fingerprint() !== $mutation->fingerprint() || $receipt->provenance->actorId !== $context->actorId || $receipt->provenance->integrationId !== $context->integrationId) {
@@ -77,7 +84,17 @@ class Engine
                 }
                 $knowledge = $this->dependency($ledger, $mutation);
                 $ledger->beginDraft();
-                $outcome = $this->apply($ledger, $mutation, $record, $knowledge, $context);
+                $outcome = $this->apply($ledger, $mutation, $record, $knowledge, $context, $onConflict);
+                if ($outcome->status === MutationStatus::PullRequired) {
+                    // Like a gap: no receipt, no acknowledgement, no commit.
+                    // The writer is expected to send this same mutation again,
+                    // rebased, and a stored receipt would turn that into a
+                    // reused identity.
+                    $ledger->rollbackDraft();
+
+                    return new MutationResult(MutationStatus::PullRequired, $outcome->recordVersion, reason: $outcome->reason,
+                        decisions: $outcome->decisions, acknowledgedSequence: $ack, conflicts: $outcome->conflicts);
+                }
                 $proposed = $ledger->record($mutation->entity);
                 // Whatever is about to be committed is validated, rather than a
                 // list of statuses someone has to remember to extend. Conflict
@@ -92,6 +109,14 @@ class Engine
                 // drifting apart again.
                 if ($proposed !== null && $outcome->status !== MutationStatus::Rejected) {
                     $validation = $this->validator->validate(new ValidationContext($record, $proposed, $mutation, $origin));
+                    // A preserved candidate is not in the record yet, so the
+                    // check above never saw its value. It is a value someone
+                    // may choose later, and one that could never be valid has
+                    // no business waiting in a group for them to choose it.
+                    $chosen = $this->asIfChosen($proposed, $mutation, $outcome);
+                    if ($validation->isValid() && $chosen !== null) {
+                        $validation = $this->validator->validate(new ValidationContext($record, $chosen, $mutation, $origin));
+                    }
                     if (! $validation->isValid()) {
                         $outcome = new MutationResult(MutationStatus::ValidationFailed, $actualVersion,
                             reason: 'invalid_entity_state', decisions: $outcome->decisions,
@@ -147,6 +172,21 @@ class Engine
         return $result;
     }
 
+    /** The record as it would be if every candidate this mutation preserved were chosen; null when it preserved none. */
+    private function asIfChosen(EntityRecord $proposed, Mutation $mutation, MutationResult $outcome): ?EntityRecord
+    {
+        $fields = $proposed->fields;
+        $preserved = false;
+        foreach ($mutation->operations as $operation) {
+            if (($outcome->decisions[$operation->field] ?? null) === ConflictDecision::Preserve) {
+                $fields[$operation->field] = new FieldState($operation->value, $fields[$operation->field]->version ?? null, $fields[$operation->field]->origin ?? null);
+                $preserved = true;
+            }
+        }
+
+        return $preserved ? new EntityRecord($proposed->entity, $proposed->version, $fields, $proposed->deleted) : null;
+    }
+
     /** @return array<string, FieldVersion> */
     private function dependency(Ledger $ledger, Mutation $mutation): array
     {
@@ -162,7 +202,7 @@ class Engine
     }
 
     /** @param array<string, FieldVersion> $knowledge */
-    private function apply(Ledger $ledger, Mutation $mutation, ?EntityRecord $record, array $knowledge, AdapterContext $context): MutationResult
+    private function apply(Ledger $ledger, Mutation $mutation, ?EntityRecord $record, array $knowledge, AdapterContext $context, OnConflict $onConflict): MutationResult
     {
         if ($mutation->kind === MutationKind::Create) {
             if ($record !== null) {
@@ -194,13 +234,14 @@ class Engine
             return $this->resolve($ledger, $mutation, $record, $knowledge, $context);
         }
 
-        return $this->update($ledger, $mutation, $record, $knowledge, $context);
+        return $this->update($ledger, $mutation, $record, $knowledge, $context, $onConflict);
     }
 
     /** @param array<string, FieldVersion> $knowledge */
-    private function update(Ledger $ledger, Mutation $mutation, EntityRecord $record, array $knowledge, AdapterContext $context): MutationResult
+    private function update(Ledger $ledger, Mutation $mutation, EntityRecord $record, array $knowledge, AdapterContext $context, OnConflict $onConflict): MutationResult
     {
         $accepted = $knowledge;
+        $stale = [];
         $pending = [];
         $decisions = [];
         $groups = [];
@@ -224,12 +265,25 @@ class Engine
             if ($decision === ConflictDecision::Client) {
                 $pending[] = $operation;
             }
+            if ($decision === ConflictDecision::Preserve && $onConflict === OnConflict::Pull) {
+                // Checked before anything is preserved, so a refusal leaves
+                // no group behind for a write that never happened.
+                $stale[$operation->field] = $conflicts[$operation->field];
+
+                continue;
+            }
             if ($decision === ConflictDecision::Preserve) {
                 $groups[] = $this->preserve($ledger, $mutation, $record, $operation, $context)->id;
             }
         }
         if (in_array(ConflictDecision::Reject, $decisions, true)) {
             return new MutationResult(MutationStatus::Rejected, $record->version, reason: 'conflict_rejected', decisions: $decisions, conflicts: $conflicts);
+        }
+        if ($stale !== []) {
+            // The whole mutation, not the fields that happened to be fresh:
+            // applying half of an edit the writer is about to rethink would
+            // leave the record in a state nobody chose.
+            return new MutationResult(MutationStatus::PullRequired, $record->version, reason: 'pull_required', conflicts: $stale);
         }
         if ($mutation->atomic && $groups !== []) {
             $pending = [];

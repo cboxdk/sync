@@ -17,6 +17,29 @@ After strict revision preconditions pass, the engine compares the proposed value
 | `ClientWins` | Applies incoming; earlier canonical remains in journal/feed | `client_wins` |
 | `RejectOnConflict` | Rejects the entire mutation without canonical or candidate changes | `reject_on_conflict` |
 
+## Letting the writer decide
+
+`Engine::process()` takes an optional third argument, `OnConflict`. The default,
+`OnConflict::Resolve`, is everything above. `OnConflict::Pull` changes one case
+only: a field the resolver decides to **preserve** is not preserved. The whole
+mutation is refused with `pull_required` instead, and nothing is stored - no
+record change, no group, no receipt, no acknowledgement, no commit.
+`MutationResult::$conflicts` names the contested fields and `$recordVersion` is
+the version that carries them.
+
+The writer then sends the same mutation again - same id, same sequence - with
+the operations it now wants and that record version as its base. The identity is
+reused on purpose: the refusal stored nothing, so this is still the first time
+the server records this write. `Mutation::rebased()` and `Outbox::rebase()` do
+this for a queued write.
+
+Decisions the resolver makes itself (`client_wins`, `server_wins`,
+`reject_on_conflict`) are unaffected, so a writer cannot use `Pull` to get
+around them. The mode is not part of the mutation's identity: a replay is
+answered from its receipt whichever mode it arrives in.
+
+## Decisions
+
 Automatic decisions are returned per field, never hidden behind `latest()`. A server-wins mutation with no other changes returns `noop` **with** the server-wins decision; inspect `decisions` as well as `status`.
 
 There is one open group per entity/field, with candidates identified by mutation ID plus field. Equal noncanonical proposals from different mutations remain separate candidates. Each candidate retains its own base and provenance. A later ordinary write leaves all open candidates intact. If canonical subsequently conflicts again, its new origin is added to that same group.

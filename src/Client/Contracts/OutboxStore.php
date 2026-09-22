@@ -28,10 +28,11 @@ interface OutboxStore
 
     /**
      * The oldest mutation still awaiting acknowledgement, with its placeholder
-     * sequence. Narrowed to one entity type when given, because a push names
-     * one type and must not send another type's queued work as that type.
+     * sequence. Narrowed to one entity type and one space when given, because a
+     * push names both and must not send another type's or another tenant's
+     * queued work under them.
      */
-    public function head(?string $entityType = null): ?Mutation;
+    public function head(?string $entityType = null, ?string $space = null): ?Mutation;
 
     /**
      * Rename the entity every queued mutation refers to.
@@ -49,6 +50,15 @@ interface OutboxStore
     public function rekey(EntityKey $from, EntityKey $to): void;
 
     /**
+     * Put a rethought version of a queued mutation in its place.
+     *
+     * Same id, same position in the queue: the server refused the first
+     * attempt without storing anything, so the rebased write is still the one
+     * it is waiting for. Nothing happens when the mutation is no longer queued.
+     */
+    public function replace(Mutation $mutation): void;
+
+    /**
      * The highest sequence acknowledged for this replica IN THIS SPACE.
      *
      * The server keys an acknowledgement stream by space and replica together,
@@ -57,6 +67,12 @@ interface OutboxStore
      */
     public function acknowledged(Replica $replica, string $space): int;
 
+    /**
+     * Set the acknowledged sequence to exactly this, lower or higher.
+     *
+     * Not a high-water mark: a server that says it is behind this device is
+     * the only authority on where the stream resumes.
+     */
     public function setAcknowledged(Replica $replica, string $space, int $sequence): void;
 
     public function acknowledge(string $mutationId): void;
@@ -66,6 +82,14 @@ interface OutboxStore
 
     /** @return list<array{mutation: Mutation, reason: string}> */
     public function abandoned(): array;
+
+    /**
+     * Stop reporting an abandoned mutation: the application has dealt with it.
+     *
+     * Its identity is gone with it, exactly like an acknowledged one's. Never
+     * queue under it again: the server may hold a receipt for it.
+     */
+    public function dismiss(string $mutationId): void;
 
     public function pending(?string $entityType = null): int;
 

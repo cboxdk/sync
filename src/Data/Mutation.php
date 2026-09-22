@@ -7,6 +7,7 @@ namespace Cbox\Sync\Data;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\ValueObjects\EntityKey;
+use Cbox\Sync\ValueObjects\Identifier;
 use Cbox\Sync\ValueObjects\MutationSequence;
 use Cbox\Sync\ValueObjects\RecordVersion;
 use Cbox\Sync\ValueObjects\Replica;
@@ -41,6 +42,10 @@ readonly class Mutation
         if ($id === '' || $dependsOn === '' || $dependsOn === $id) {
             throw new InvalidRequest('Invalid mutation identity/dependency');
         }
+        Identifier::check($id, 'Mutation id');
+        if ($dependsOn !== null) {
+            Identifier::check($dependsOn, 'Mutation dependency');
+        }
         self::validateOperations($operations);
         if (($kind === MutationKind::Resolve) !== ($resolution !== null) || ($kind === MutationKind::Resolve && count($operations) !== 1)) {
             throw new InvalidRequest('Resolve requires exactly one field operation and resolution');
@@ -72,6 +77,34 @@ readonly class Mutation
             $this->kind,
             $this->baseVersion,
             $this->operations,
+            $this->atomic,
+            $this->dependsOn,
+            $this->resolution,
+            $this->expectedVersion,
+        );
+    }
+
+    /**
+     * The same mutation, rethought against newer knowledge of the record.
+     *
+     * Used after the server answered pull_required: the device has caught up,
+     * decided what its edit should now be, and sends it again. The identity is
+     * kept on purpose. A refusal stores nothing, so this is still the first
+     * time the server will record this write - and a new id would let an
+     * earlier attempt that did land be applied a second time.
+     *
+     * @param  list<FieldOperation>  $operations
+     */
+    public function rebased(RecordVersion $baseVersion, array $operations): self
+    {
+        return new self(
+            $this->id,
+            $this->entity,
+            $this->replica,
+            $this->sequence,
+            $this->kind,
+            $baseVersion,
+            $operations,
             $this->atomic,
             $this->dependsOn,
             $this->resolution,

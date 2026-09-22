@@ -50,26 +50,30 @@ class Outbox
      */
     public function queue(EntityKey $entity, MutationKind $kind, array $operations, int $baseVersion, bool $atomic = true, ?Resolution $resolution = null, ?string $dependsOn = null): Mutation
     {
-        return $this->store->transaction(function () use ($entity, $kind, $operations, $baseVersion, $atomic, $resolution, $dependsOn): Mutation {
-            $mutation = new Mutation(
-                ($this->identity)(),
-                $entity,
-                $this->replica,
-                // A placeholder. The real sequence is assigned when the
-                // mutation is handed out, so one that is never accepted does
-                // not consume a number the server will wait for forever.
-                new MutationSequence(1),
-                $kind,
-                new RecordVersion($baseVersion),
-                $operations,
-                $atomic,
-                $dependsOn,
-                $resolution,
-            );
-            $this->store->append($mutation);
+        return $this->store->transaction(fn (): Mutation => $this->append($entity, $kind, $operations, $baseVersion, $atomic, $resolution, $dependsOn));
+    }
 
-            return $mutation;
-        });
+    /** @param list<FieldOperation> $operations */
+    private function append(EntityKey $entity, MutationKind $kind, array $operations, int $baseVersion, bool $atomic, ?Resolution $resolution, ?string $dependsOn): Mutation
+    {
+        $mutation = new Mutation(
+            ($this->identity)(),
+            $entity,
+            $this->replica,
+            // A placeholder. The real sequence is assigned when the
+            // mutation is handed out, so one that is never accepted does
+            // not consume a number the server will wait for forever.
+            new MutationSequence(1),
+            $kind,
+            new RecordVersion($baseVersion),
+            $operations,
+            $atomic,
+            $dependsOn,
+            $resolution,
+        );
+        $this->store->append($mutation);
+
+        return $mutation;
     }
 
     /**
@@ -81,18 +85,20 @@ class Outbox
      * wait for that number forever and every later write would come back as a
      * gap. Numbering at send time makes that hole impossible.
      */
-    public function head(?string $entityType = null): ?Mutation
+    public function head(?string $entityType = null, ?string $space = null): ?Mutation
     {
-        $mutation = $this->store->head($entityType);
+        $mutation = $this->store->head($entityType, $space);
         if ($mutation === null) {
             return null;
         }
 
+        $stream = $this->stream($mutation->entity);
+
         return new Mutation(
             $mutation->id,
             $mutation->entity,
-            $mutation->replica,
-            new MutationSequence($this->store->acknowledged($this->replica, $mutation->entity->space) + 1),
+            $stream,
+            new MutationSequence($this->store->acknowledged($stream, $mutation->entity->space) + 1),
             $mutation->kind,
             $mutation->baseVersion,
             $mutation->operations,
@@ -128,6 +134,29 @@ class Outbox
         });
     }
 
+    /**
+     * Send a queued write again, rethought against what the device now knows.
+     *
+     * The answer to pull_required. $baseVersion is the version the server
+     * reported with the refusal - not whatever the device pulled afterwards.
+     * A newer pull can include changes to fields the refusal never mentioned,
+     * and basing on it would overwrite them without anyone having looked.
+     *
+     * An empty list of operations is allowed: the device decided the other
+     * edit wins everywhere, and the server records that as a no-op.
+     *
+     * @param  list<FieldOperation>  $operations
+     */
+    public function rebase(Mutation $mutation, RecordVersion $baseVersion, array $operations): Mutation
+    {
+        $rebased = $mutation->rebased($baseVersion, $operations);
+        $this->store->transaction(function () use ($rebased): void {
+            $this->store->replace($rebased);
+        });
+
+        return $rebased;
+    }
+
     public function pending(?string $entityType = null): int
     {
         return $this->store->pending($entityType);
@@ -137,7 +166,7 @@ class Outbox
     public function acknowledged(Mutation $mutation): void
     {
         $this->store->transaction(function () use ($mutation): void {
-            $this->store->setAcknowledged($this->replica, $mutation->entity->space, $mutation->sequence->value);
+            $this->store->setAcknowledged($this->stream($mutation->entity), $mutation->entity->space, $mutation->sequence->value);
             $this->store->acknowledge($mutation->id);
         });
     }
@@ -157,7 +186,30 @@ class Outbox
      */
     public function resumeAfter(Mutation $mutation, int $acknowledgedSequence): void
     {
-        $this->store->setAcknowledged($this->replica, $mutation->entity->space, $acknowledgedSequence);
+        // Exactly, and downward too. A gap is only ever reported when this
+        // device is AHEAD of the server - a server restored from a backup, a
+        // device database restored from a newer one - so a counter that could
+        // only rise would resend the same number and get the same gap forever.
+        $this->store->setAcknowledged($this->stream($mutation->entity), $mutation->entity->space, $acknowledgedSequence);
+    }
+
+    /**
+     * The stream a queued write travels on: one per entity type and space.
+     *
+     * The server numbers writes per replica per SPACE, where the space is its
+     * own mapping of type and scope - which this device cannot see. Two of
+     * this device's streams landing in one server space would then share a
+     * counter on one side and not the other, and the first lost response makes
+     * a write collide with a number already used and be refused for good.
+     * Giving each (type, space) its own replica identity makes the two sides
+     * agree whatever the server's mapping is.
+     *
+     * Bounded, because the server stores replica identities in fixed-width
+     * columns, and stable, because changing it would restart the numbering.
+     */
+    public function stream(EntityKey $entity): Replica
+    {
+        return new Replica($this->replica->id.'#'.substr(hash('sha256', $entity->type."\0".$entity->space), 0, 16));
     }
 
     /**
@@ -168,6 +220,39 @@ class Outbox
     public function abandon(Mutation $mutation, string $reason): void
     {
         $this->store->abandon($mutation->id, $reason);
+    }
+
+    /**
+     * Send an abandoned write again, as a new write.
+     *
+     * For a refusal that was about the moment rather than the write - the
+     * session had expired, the user lacked a permission they have since been
+     * given. A new identity, because the server may hold a receipt for the old
+     * one, and at the back of the queue, because it is being made now.
+     *
+     * Null when no abandoned write has that id.
+     */
+    public function requeue(string $mutationId): ?Mutation
+    {
+        return $this->store->transaction(function () use ($mutationId): ?Mutation {
+            foreach ($this->store->abandoned() as $entry) {
+                $old = $entry['mutation'];
+                if ($old->id !== $mutationId) {
+                    continue;
+                }
+                $this->store->dismiss($old->id);
+
+                return $this->append($old->entity, $old->kind, $old->operations, $old->baseVersion->value, $old->atomic, $old->resolution, null);
+            }
+
+            return null;
+        });
+    }
+
+    /** The application has told the user; stop reporting it. */
+    public function dismiss(string $mutationId): void
+    {
+        $this->store->dismiss($mutationId);
     }
 
     /** @return list<array{mutation: Mutation, reason: string}> */
