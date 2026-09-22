@@ -99,3 +99,27 @@ it('fails an If-Match on a record the log does not hold', function () {
         ->and($engine->recordTrusted($key, new Replica('server'), [Op::set('title', 'x')], false, acceptVersions: [])?->status)->toBe(MutationStatus::PreconditionFailed)
         ->and($store->record($key))->toBeNull();
 });
+
+/**
+ * Another writer between a device's write and its echo: the device's answer
+ * used to jump to the echo's version, which includes that writer's edit, and
+ * the device's next edit based on it overwrote the edit unseen.
+ */
+it('does not move a device\'s answer past a write it has not seen', function () {
+    $store = $this->syncStore();
+    $engine = new Engine($store);
+    $key = new EntityKey('team', 'notes', 'n1');
+    $a = new Replica('a');
+    $create = new Mutation('c1', $key, $a, new MutationSequence(1), MutationKind::Create, new RecordVersion(0), [Op::set('title', 'A')]);
+    $engine->process($create);
+    $engine->recordTrusted($key, new Replica('b'), [Op::set('title', 'B')], false);
+    $engine->recordTrusted($key, new Replica('server'), [Op::set('status', 'open'), Op::set('title', 'B')], false, echoOf: 'c1');
+
+    $answer = $engine->process($create);
+    $edit = $engine->process(new Mutation('c2', $key, $a, new MutationSequence(2), MutationKind::Update, $answer->recordVersion, [Op::set('title', 'A2')]));
+
+    expect($answer->recordVersion->value)->toBe(1)
+        ->and($answer->acceptedVersions)->toHaveKey('status')
+        ->and($answer->acceptedVersions['title']->value)->toBe(1)
+        ->and($edit->status)->toBe(MutationStatus::Conflict);
+});

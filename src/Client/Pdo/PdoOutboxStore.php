@@ -69,6 +69,9 @@ class PdoOutboxStore implements OutboxStore
         if (! in_array('numbered', $columns, true)) {
             $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN numbered SMALLINT NOT NULL DEFAULT 0');
         }
+        if (! in_array('sends', $columns, true)) {
+            $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN sends INTEGER NOT NULL DEFAULT 0');
+        }
         // A write an earlier release sent and never heard back about carries
         // the placeholder number in its payload: that release numbered afresh
         // on every attempt, and only flagged the row. Trusting that payload's
@@ -178,13 +181,17 @@ class PdoOutboxStore implements OutboxStore
 
     public function setAcknowledged(Replica $replica, string $space, int $sequence): void
     {
-        // One statement that cannot fail on a race, and no plain read first:
-        // on MySQL that read would fix the transaction's snapshot before the
-        // stream lock is taken.
-        $this->run(match ($this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME)) {
-            'mysql' => 'INSERT IGNORE INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0)',
-            default => 'INSERT INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0) ON CONFLICT (replica_id, space) DO NOTHING',
-        }, [$replica->id, $space]);
+        // Created only when missing, by one statement that cannot fail on a
+        // race. Inserting unconditionally took a shared lock on the existing
+        // row on MySQL, and two hand-outs both asking for it exclusively next
+        // deadlocked. Transactions here run at READ COMMITTED, so the read
+        // first fixes no stale snapshot.
+        if ($this->scalar('SELECT 1 FROM sync_outbox_sequences WHERE replica_id = ? AND space = ?', [$replica->id, $space]) === null) {
+            $this->run(match ($this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME)) {
+                'mysql' => 'INSERT IGNORE INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0)',
+                default => 'INSERT INTO sync_outbox_sequences (replica_id, space, assigned) VALUES (?, ?, 0) ON CONFLICT (replica_id, space) DO NOTHING',
+            }, [$replica->id, $space]);
+        }
         $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ? AND assigned < ?', [$sequence, $replica->id, $space, $sequence]);
     }
 
@@ -250,6 +257,26 @@ class PdoOutboxStore implements OutboxStore
     public function unmarkSent(string $mutationId): void
     {
         $this->run('UPDATE sync_outbox SET attempted = 0 WHERE mutation_id = ?', [$mutationId]);
+    }
+
+    public function countSend(string $mutationId): void
+    {
+        $this->run('UPDATE sync_outbox SET sends = sends + 1 WHERE mutation_id = ?', [$mutationId]);
+    }
+
+    public function sends(string $mutationId): int
+    {
+        return (int) ($this->scalar('SELECT sends FROM sync_outbox WHERE mutation_id = ?', [$mutationId]) ?? '0');
+    }
+
+    public function queuedOn(Replica $replica, string $space): array
+    {
+        $mutations = [];
+        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE replica_id = ? AND space = ? AND abandoned_reason IS NULL ORDER BY queued_at, mutation_id'.$this->locking(), [$replica->id, $space]) as $row) {
+            $mutations[] = Payload::decode($row[1], Mutation::class);
+        }
+
+        return $mutations;
     }
 
     public function isSent(string $mutationId): bool
@@ -403,12 +430,28 @@ class PdoOutboxStore implements OutboxStore
                 return $result;
             } catch (\Throwable $failure) {
                 $this->pdo->exec('ROLLBACK');
+                // Two device processes that each hold what the other needs:
+                // nothing was written, and the same call may simply be made
+                // again.
+                if ($failure instanceof \PDOException && self::isContention($failure)) {
+                    throw new TransientFailure('The outbox is busy; try again', previous: $failure);
+                }
 
                 throw $failure;
             }
         } finally {
             $this->active = false;
         }
+    }
+
+    private static function isContention(\PDOException $failure): bool
+    {
+        $sqlState = $failure->errorInfo[0] ?? null;
+        $state = is_string($sqlState) ? $sqlState : (string) $failure->getCode();
+        $driverCode = $failure->errorInfo[1] ?? null;
+
+        return in_array($state, ['40001', '40P01', '55P03'], true) || in_array($driverCode, [1213, 1205], true)
+            || ($state === 'HY000' && in_array($driverCode, [5, 6], true));
     }
 
     /** @param list<string|int|null> $bindings */

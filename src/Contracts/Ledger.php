@@ -29,13 +29,15 @@ interface Ledger
 {
     public function space(): string;
 
+    public function receipt(string $mutationId): ?Receipt;
+
     /**
-     * $latest asks for the latest committed receipt even where the reads of
-     * this transaction see an older snapshot - for a lookup whose answer is
-     * expected to exist, where a stale miss would be misread. Implementations
-     * without snapshots ignore it.
+     * The answer stored for a stream position in this space, read as the
+     * latest committed state even where this transaction's other reads see an
+     * older snapshot - a host's transaction that began before the space lock.
+     * Implementations without snapshots answer from what they hold.
      */
-    public function receipt(string $mutationId, bool $latest = false): ?Receipt;
+    public function receiptAt(Replica $replica, int $sequence): ?Receipt;
 
     /**
      * Replace the stored answer of a mutation this space already processed -

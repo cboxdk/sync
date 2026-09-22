@@ -342,6 +342,9 @@ class PdoSchema
                 'primaryKey' => ['mutation_id'],
                 'indexes' => [
                     ['name' => 'sync_receipts_retention', 'unique' => false, 'columns' => ['space', 'commit_sequence']],
+                    // A stream position's answer, looked up inside the space so
+                    // a locking read never touches another tenant's range.
+                    ['name' => 'sync_receipts_position', 'unique' => false, 'columns' => ['space', 'replica_id', 'sequence']],
                 ],
             ],
             [

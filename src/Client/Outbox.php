@@ -27,12 +27,34 @@ use Cbox\Sync\ValueObjects\Replica;
  */
 class Outbox
 {
+    /** @var array<string, array<string, string>> type => [field => the type it points at] */
+    private array $references = [];
+
+    /** @var array<string, string> type => the type whose id is its scope */
+    private array $scopedBy = [];
+
     /** @param \Closure(): string $identity */
     public function __construct(
         private readonly OutboxStore $store,
         private readonly Replica $replica,
         private readonly \Closure $identity,
     ) {}
+
+    /**
+     * How the application's records point at each other, for the calls that
+     * need it and are not given it - so dismissing a refused parent through
+     * the outbox directly still takes its children with it.
+     *
+     * @param  array<string, array<string, string>>  $references
+     * @param  array<string, string>  $scopedBy
+     */
+    public function relatedBy(array $references, array $scopedBy): static
+    {
+        $this->references = $references;
+        $this->scopedBy = $scopedBy;
+
+        return $this;
+    }
 
     /** @param \Closure(): string|null $identity generates globally unique mutation ids */
     public static function for(OutboxStore $store, Replica $replica, ?\Closure $identity = null): self
@@ -164,6 +186,8 @@ class Outbox
             $this->store->lockStream($stream, $space);
             $waiting = $this->store->inFlight($stream, $space);
             if ($waiting !== null) {
+                $this->store->countSend($waiting->id);
+
                 return $waiting;
             }
             // Read again inside the transaction: another process may have
@@ -194,6 +218,7 @@ class Outbox
                 $mutation->expectedVersion,
             );
             $this->store->markSent($numbered);
+            $this->store->countSend($numbered->id);
 
             return $numbered;
         });
@@ -225,6 +250,12 @@ class Outbox
                 $changed = true;
             }
             $current = $this->store->find($mutation->id) ?? $mutation;
+            if ($this->store->isSent($mutation->id)) {
+                // Handed out by another process while this one looked: it may
+                // be on the server as it is, and a rewritten copy under the
+                // same identity would be refused as reused.
+                return $changed;
+            }
 
             // Its own record by the name given in ITS space: a handle is only
             // unique within one, and another tenant's record of the same
@@ -514,15 +545,15 @@ class Outbox
      * Jumping to the server's position instead renumbered those replays past
      * the pruned range, and they were applied a second time.
      */
-    public function settledUnknown(Mutation $mutation, ?int $serverAcknowledged = null): void
+    public function settledUnknown(Mutation $mutation, ?int $serverAcknowledged = null): int
     {
-        $this->store->transaction(function () use ($mutation, $serverAcknowledged): void {
+        return $this->store->transaction(function () use ($mutation, $serverAcknowledged): int {
             $space = $mutation->entity->space;
             $this->store->abandon($mutation->id, 'receipt_pruned');
             if ($serverAcknowledged === null || $serverAcknowledged <= $mutation->sequence->value) {
                 $this->store->setAcknowledged($mutation->replica, $space, $mutation->sequence->value);
 
-                return;
+                return 1;
             }
             // The server has seen MORE of this stream than this device knows:
             // the device's state was restored from a backup, or its id reused
@@ -532,12 +563,23 @@ class Outbox
             // one position per write instead left a restored device unable to
             // write anything new until it had crawled through the whole pruned
             // range. New writes then go out after where the server really is.
-            foreach ($this->store->queued([$mutation->entity->type]) as $queued) {
-                if ($queued->replica->id === $mutation->replica->id && $queued->entity->space === $space) {
-                    $this->store->abandon($queued->id, 'receipt_pruned');
-                }
+            //
+            // Only if this answer is still the current one: a late copy of it,
+            // arriving after the stream moved on, must not settle writes queued
+            // since - which never went anywhere.
+            if (! $this->store->resetAcknowledged($mutation->replica, $space, $serverAcknowledged, $mutation->sequence->value - 1)) {
+                return 1;
             }
-            $this->store->resetAcknowledged($mutation->replica, $space, $serverAcknowledged, $mutation->sequence->value - 1);
+            $settled = 1;
+            // Every type: a stream from before streams were split by type
+            // carries several, and a write of another type left behind would
+            // go out past the server's position and could apply twice.
+            foreach ($this->store->queuedOn($mutation->replica, $space) as $queued) {
+                $this->store->abandon($queued->id, 'receipt_pruned');
+                $settled++;
+            }
+
+            return $settled;
         });
     }
 
@@ -578,22 +620,29 @@ class Outbox
      * Null when no abandoned write has that id.
      */
     /**
-     * @param  array<string, array<string, string>>  $references  as for acknowledged()
-     * @param  array<string, string>  $scopedBy  as for acknowledged()
+     * @param  array<string, array<string, string>>|null  $references  as for acknowledged(); null for what relatedBy() set
+     * @param  array<string, string>|null  $scopedBy  as for acknowledged(); null for what relatedBy() set
      */
-    public function requeue(string $mutationId, array $references = [], array $scopedBy = [], bool $evenIfItMayHaveLanded = false): ?Mutation
+    public function requeue(string $mutationId, ?array $references = null, ?array $scopedBy = null, bool $evenIfItMayHaveLanded = false): ?Mutation
     {
+        $references ??= $this->references;
+        $scopedBy ??= $this->scopedBy;
+
         return $this->store->transaction(function () use ($mutationId, $references, $scopedBy, $evenIfItMayHaveLanded): ?Mutation {
             foreach ($this->store->abandoned() as $entry) {
                 $old = $entry['mutation'];
                 if ($old->id !== $mutationId) {
                     continue;
                 }
-                if (in_array($entry['reason'], self::MAY_HAVE_LANDED, true) && ! $evenIfItMayHaveLanded) {
+                if ((in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->sends($old->id) > 1) && ! $evenIfItMayHaveLanded) {
                     // Sent again under a new identity, a write the server may
                     // already hold is applied twice - a create becomes two
                     // records. Only someone who has checked may say so.
-                    throw new InvalidRequest(sprintf('Write %s may already be on the server (%s); requeue it only after checking, with $evenIfItMayHaveLanded.', $mutationId, $entry['reason']));
+                    // So may a write sent more than once: an earlier attempt got
+                    // no answer, and the refusal came on a resend - a create
+                    // the server applied, then refused to answer again once
+                    // the user lost access, is a second record if requeued.
+                    throw new InvalidRequest(sprintf('Write %s may already be on the server (%s after %d sends); requeue it only after checking, with $evenIfItMayHaveLanded.', $mutationId, $entry['reason'], $this->store->sends($old->id)));
                 }
                 $this->store->dismiss($old->id);
 
@@ -631,15 +680,20 @@ class Outbox
      * out carrying a handle the server never heard of. They are abandoned as
      * parent_abandoned, for the application to report in turn.
      *
-     * @param  array<string, array<string, string>>  $references  as for acknowledged()
-     * @param  array<string, string>  $scopedBy  as for acknowledged()
+     * @param  array<string, array<string, string>>|null  $references  as for acknowledged(); null for what relatedBy() set
+     * @param  array<string, string>|null  $scopedBy  as for acknowledged(); null for what relatedBy() set
      */
-    public function dismiss(string $mutationId, array $references = [], array $scopedBy = []): void
+    public function dismiss(string $mutationId, ?array $references = null, ?array $scopedBy = null): void
     {
+        $references ??= $this->references;
+        $scopedBy ??= $this->scopedBy;
         $this->store->transaction(function () use ($mutationId, $references, $scopedBy): void {
             foreach ($this->store->abandoned() as $entry) {
                 $old = $entry['mutation'];
-                if ($old->id === $mutationId && $old->kind === MutationKind::Create && $this->queuedCreate($old->entity->type, $old->entity->id) === null) {
+                // Not a create that may have landed: its record probably
+                // exists, and the writes that need it are still good.
+                $mayHaveLanded = in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->sends($old->id) > 1;
+                if ($old->id === $mutationId && $old->kind === MutationKind::Create && ! $mayHaveLanded && $this->queuedCreate($old->entity->type, $old->entity->id) === null) {
                     foreach ($this->dependents($old->entity, $references, $scopedBy) as $dependent) {
                         $this->store->abandon($dependent->id, 'parent_abandoned');
                     }

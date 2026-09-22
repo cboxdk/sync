@@ -157,17 +157,26 @@ class Engine
      */
     private function amendWithEcho(Ledger $ledger, string $cause, EntityKey $entity, MutationResult $echo): void
     {
-        $receipt = $ledger->receipt($cause, latest: true);
+        $receipt = $ledger->receipt($cause);
         if ($receipt === null || $receipt->mutation->entity->key() !== $entity->key()) {
             return;
         }
         $known = $receipt->result->acceptedVersions;
         foreach ($echo->acceptedVersions as $field => $version) {
-            $known[$field] = $version;
+            // Only what the echo itself wrote. A field it sent unchanged is
+            // reported at the version that last wrote it - which can be
+            // another writer's, whose edit the device has not seen.
+            if ($version->value === $echo->recordVersion->value) {
+                $known[$field] = $version;
+            }
         }
         $was = $receipt->result;
+        // The record version only when nothing came between the write and its
+        // echo: a device basing its next edit on a version that includes
+        // another writer's change would overwrite that change unseen.
+        $version = $echo->recordVersion->value === $was->recordVersion->value + 1 ? $echo->recordVersion : $was->recordVersion;
         $ledger->amendReceipt(new Receipt($receipt->mutation, new MutationResult(
-            $was->status, $echo->recordVersion, $was->commitSequence, $was->reason, $was->decisions, $known,
+            $was->status, $version, $was->commitSequence, $was->reason, $was->decisions, $known,
             $was->conflictGroupIds, $was->acknowledgedSequence, $was->preconditionFailure, $was->validation, $was->conflicts,
         ), $receipt->provenance));
     }
@@ -199,13 +208,17 @@ class Engine
     {
         $receipt = $ledger->receipt($mutation->id);
         $ack = $ledger->acknowledged($mutation->replica);
-        if ($receipt === null && $mutation->sequence->value <= $ack) {
+        if ($receipt === null && $mutation->sequence->value <= $ack && $mutation->sequence->value > $ledger->prunedThrough($mutation->replica)) {
             // A position already used and no receipt: most likely a replay
             // whose first delivery committed after this transaction's
             // snapshot was taken - a host transaction that read before the
-            // space lock. Asked again, for the latest committed answer, before
-            // it is judged a writer that fell behind.
-            $receipt = $ledger->receipt($mutation->id, latest: true);
+            // space lock. The position's answer is asked for again, as the
+            // latest committed state, before it is judged a writer that fell
+            // behind - and only if it is this mutation's.
+            $atPosition = $ledger->receiptAt($mutation->replica, $mutation->sequence->value);
+            if ($atPosition !== null && $atPosition->mutation->id === $mutation->id) {
+                $receipt = $atPosition;
+            }
         }
         if ($receipt !== null) {
             if ($receipt->mutation->fingerprint() !== $mutation->fingerprint() || $receipt->provenance->actorId !== $context->actorId || $receipt->provenance->integrationId !== $context->integrationId) {
@@ -345,7 +358,7 @@ class Engine
         if ($mutation->dependsOn === null) {
             return [];
         }
-        $previous = $ledger->receipt($mutation->dependsOn, latest: true);
+        $previous = $ledger->receipt($mutation->dependsOn);
         if ($previous === null) {
             // Unknown - never processed, or its receipt pruned with the log.
             // Either way there is no knowledge to inherit, and inheriting none

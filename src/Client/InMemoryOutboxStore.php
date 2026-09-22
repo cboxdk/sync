@@ -149,6 +149,24 @@ class InMemoryOutboxStore implements OutboxStore
         return isset($this->attempted[$mutationId]);
     }
 
+    /** @var array<string, int> */
+    private array $sends = [];
+
+    public function countSend(string $mutationId): void
+    {
+        $this->sends[$mutationId] = ($this->sends[$mutationId] ?? 0) + 1;
+    }
+
+    public function sends(string $mutationId): int
+    {
+        return $this->sends[$mutationId] ?? 0;
+    }
+
+    public function queuedOn(Replica $replica, string $space): array
+    {
+        return array_values(array_filter($this->queue, fn (Mutation $m): bool => $m->replica->id === $replica->id && $m->entity->space === $space));
+    }
+
     public function lockStream(Replica $replica, string $space): void {}
 
     public function inFlight(Replica $replica, string $space): ?Mutation
@@ -229,11 +247,11 @@ class InMemoryOutboxStore implements OutboxStore
             throw new TransientFailure('Nested outbox transaction is unsupported');
         }
         $this->active = true;
-        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted];
+        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles];
         try {
             return $callback();
         } catch (\Throwable $failure) {
-            [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted] = $snapshot;
+            [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles] = $snapshot;
 
             throw $failure;
         } finally {

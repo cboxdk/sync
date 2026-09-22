@@ -155,6 +155,24 @@ interface OutboxStore
 
     public function isSent(string $mutationId): bool;
 
+    /** Count one sending of this write - the first, and every resend of it. */
+    public function countSend(string $mutationId): void;
+
+    /**
+     * How many times this write has gone out. More than once means an
+     * earlier attempt got no answer, so it may be on the server whatever the
+     * last answer said.
+     */
+    public function sends(string $mutationId): int;
+
+    /**
+     * Every write still queued on one stream, whatever its type - a stream
+     * from before streams were split by type carries several.
+     *
+     * @return list<Mutation>
+     */
+    public function queuedOn(Replica $replica, string $space): array;
+
     /**
      * The write on this stream that was handed out and is still waiting for
      * its answer, if any. A stream never numbers a new write while one is:

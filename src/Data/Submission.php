@@ -23,7 +23,11 @@ readonly class Submission
         public ?CommitSequence $committed = null,
     ) {}
 
-    /** Whether this call appended a commit - false for a replay, a gap, a refusal to store anything. */
+    /**
+     * Whether this call appended a commit - false for a replay, a gap, a
+     * refusal to store anything. A rejection appends one too (its receipt), so
+     * a host doing work for a write that landed checks the status as well.
+     */
     public function wrote(): bool
     {
         return $this->committed !== null;

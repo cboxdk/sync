@@ -40,23 +40,27 @@ class PdoLedger implements Ledger
         return $this->space;
     }
 
-    public function receipt(string $mutationId, bool $latest = false): ?Receipt
+    public function receipt(string $mutationId): ?Receipt
     {
-        $sql = 'SELECT payload FROM sync_receipts WHERE mutation_id = ?';
-        if ($latest && $this->lockingReads && $this->schema->driver === PdoSchema::MYSQL) {
-            // A locking read sees the latest committed row, whatever snapshot
-            // the host's transaction took before the space lock. Only here,
-            // where the row is expected to exist: a locking read that finds
-            // nothing locks the gap, and receipts are shared by every space.
-            $statement = $this->connection->prepare($sql.' FOR SHARE');
-            $statement->execute([$mutationId]);
-            $value = $statement->fetchColumn();
-            $payload = is_string($value) ? $value : null;
-        } else {
-            $payload = $this->scalar($sql, [$mutationId]);
-        }
+        $payload = $this->scalar('SELECT payload FROM sync_receipts WHERE mutation_id = ?', [$mutationId]);
 
         return $payload === null ? null : Payload::decode($payload, Receipt::class);
+    }
+
+    public function receiptAt(Replica $replica, int $sequence): ?Receipt
+    {
+        $sql = 'SELECT payload FROM sync_receipts WHERE space = ? AND replica_id = ? AND sequence = ?';
+        if ($this->lockingReads && $this->schema->driver === PdoSchema::MYSQL) {
+            // A locking read sees the latest committed row, whatever snapshot
+            // the host's transaction took before the space lock - and by
+            // position within the space, so what it locks is this tenant's.
+            $sql .= ' FOR SHARE';
+        }
+        $statement = $this->connection->prepare($sql);
+        $statement->execute([$this->space, $replica->id, $sequence]);
+        $value = $statement->fetchColumn();
+
+        return is_string($value) ? Payload::decode($value, Receipt::class) : null;
     }
 
     public function prunedThrough(Replica $replica): int

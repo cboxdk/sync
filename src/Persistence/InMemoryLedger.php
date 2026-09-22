@@ -34,9 +34,20 @@ class InMemoryLedger implements Ledger
         return $this->space;
     }
 
-    public function receipt(string $mutationId, bool $latest = false): ?Receipt
+    public function receipt(string $mutationId): ?Receipt
     {
         return $this->state->receipts[$mutationId] ?? null;
+    }
+
+    public function receiptAt(Replica $replica, int $sequence): ?Receipt
+    {
+        foreach ($this->state->receipts as $receipt) {
+            if ($receipt->mutation->replica->id === $replica->id && $receipt->mutation->sequence->value === $sequence && $receipt->mutation->entity->space === $this->space) {
+                return $receipt;
+            }
+        }
+
+        return null;
     }
 
     public function prunedThrough(Replica $replica): int

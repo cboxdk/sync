@@ -648,6 +648,74 @@ it('refuses to requeue a write that may already have landed', function (OutboxSt
         ->and($outbox->requeue($write->id, evenIfItMayHaveLanded: true))->not->toBeNull();
 })->with(outboxStores());
 
+/** A late copy of a receipt_pruned answer settled writes queued since - which had never gone anywhere. */
+it('ignores a late copy of the answer that settled a restored stream', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Update, [Op::set('t', 'a')], 1);
+    $first = $outbox->head() ?? throw new LogicException('expected a');
+    expect($outbox->settledUnknown($first, serverAcknowledged: 500))->toBe(1);
+    $fresh = $outbox->queue(note('d'), MutationKind::Update, [Op::set('t', 'd')], 1);
+
+    expect($outbox->settledUnknown($first, serverAcknowledged: 500))->toBe(1)
+        ->and($outbox->head()?->id)->toBe($fresh->id);
+})->with(outboxStores());
+
+/** A stream from before streams were split by type carries several types; one left behind went out past the server and could apply twice. */
+it('settles every type on a restored stream from before streams were split', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $legacy = new Replica('device-1');
+    foreach (['notes' => 'n1', 'tasks' => 't1'] as $type => $id) {
+        $store->append(new Mutation('legacy-'.$id, new EntityKey('team-1', $type, $id), $legacy, new MutationSequence(1), MutationKind::Update, new RecordVersion(1), [Op::set('t', $id)]));
+    }
+    $first = $outbox->head('notes') ?? throw new LogicException('expected the note');
+
+    expect($outbox->settledUnknown($first, serverAcknowledged: 500))->toBe(2)
+        ->and($outbox->pending())->toBe(0);
+})->with(outboxStores());
+
+/** A create that may have landed probably exists; dismissing its report must not abandon the edits that need it. */
+it('keeps the edits of a dismissed create that may have landed', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $edit = $outbox->queue(note('a'), MutationKind::Update, [Op::set('t', 'b')], 1);
+    $create = $outbox->head() ?? throw new LogicException('expected the create');
+    $outbox->settledUnknown($create);
+
+    $outbox->dismiss($create->id);
+
+    expect($outbox->abandoned())->toBe([])
+        ->and($outbox->head()?->id)->toBe($edit->id);
+})->with(outboxStores());
+
+/**
+ * A write sent more than once got no answer at least once, so it may be on the
+ * server whatever the last answer said - a create applied, then refused on the
+ * resend because the user had lost access, was a second record when requeued.
+ */
+it('treats a write refused on a resend as one that may have landed', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $write = $outbox->head() ?? throw new LogicException('expected a');
+    $outbox->head(); // the resend, after an answer that never came
+    $outbox->abandon($write, 'forbidden');
+
+    expect($store->sends($write->id))->toBe(2)
+        ->and(fn () => $outbox->requeue($write->id))->toThrow(InvalidRequest::class);
+})->with(outboxStores());
+
+/** Dismissing through the outbox directly, without the relations, used to release a refused parent's children with its handle. */
+it('uses the relations it was given when dismiss is not told them', function (OutboxStore $store) {
+    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects']], []);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+    $child = $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
+    $create = $outbox->head('projects') ?? throw new LogicException('expected the create');
+    $outbox->refused($create, 'validation_failed');
+
+    $outbox->dismiss($create->id);
+
+    expect($outbox->abandoned()[0]['mutation']->id)->toBe($child->id);
+})->with(outboxStores());
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
