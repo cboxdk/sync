@@ -71,8 +71,11 @@ if ($options['worker'] !== '') {
     $retries = 0;
     for ($sequence = 1; $sequence <= $mutations; $sequence++) {
         $entity = new EntityKey($space, 'notes', $worker.'-'.$sequence);
+        // Mutation identity is global, not per space: named after the space
+        // too, so a run in separate spaces never collides with a shared one
+        // on the same database.
         $mutation = new Mutation(
-            $worker.'-'.$sequence, $entity, new Replica($worker),
+            $space.'/'.$worker.'-'.$sequence, $entity, new Replica($worker),
             new MutationSequence($sequence), MutationKind::Create, new RecordVersion(0),
             [Op::set('title', $worker.'/'.$sequence)],
         );
