@@ -376,6 +376,8 @@ class Outbox
         $rebased = $mutation->rebased($baseVersion, $operations);
         $this->store->transaction(function () use ($rebased): void {
             $this->store->replace($rebased);
+            // pull_required is answered only for an identity with no receipt.
+            $this->store->clearSends($rebased->id);
         });
 
         return $rebased;
@@ -508,6 +510,9 @@ class Outbox
             // take the newer attempt's number away from it.
             if ($this->store->resetAcknowledged($mutation->replica, $mutation->entity->space, $acknowledgedSequence, $mutation->sequence->value - 1)) {
                 $this->store->unmarkSent($mutation->id);
+                // A gap is answered only for an identity with no receipt: no
+                // sending of it landed.
+                $this->store->clearSends($mutation->id);
             }
         });
     }
@@ -584,6 +589,17 @@ class Outbox
     }
 
     /**
+     * The server answered this sending of the write - whatever it said. Only
+     * sendings that got no answer at all leave it possibly on the server; one
+     * answered "busy" or "sign in again" did not land, and counting it as if
+     * it might have blocked the requeue a user is entitled to.
+     */
+    public function answered(Mutation $mutation): void
+    {
+        $this->store->countAnswer($mutation->id);
+    }
+
+    /**
      * The server processed the write and refused it - rejected, invalid, a
      * precondition that failed. Its position is acknowledged like any answer,
      * and it is kept as abandoned under that reason rather than dropped: the
@@ -595,6 +611,7 @@ class Outbox
     {
         $this->store->transaction(function () use ($mutation, $reason): void {
             $this->store->setAcknowledged($mutation->replica, $mutation->entity->space, $mutation->sequence->value);
+            $this->store->countAnswer($mutation->id);
             $this->store->abandon($mutation->id, $reason);
         });
     }
@@ -606,7 +623,13 @@ class Outbox
      */
     public function abandon(Mutation $mutation, string $reason): void
     {
-        $this->store->abandon($mutation->id, $reason);
+        $this->store->transaction(function () use ($mutation, $reason): void {
+            if ($this->store->isSent($mutation->id)) {
+                // Refused on an answer: that sending is accounted for.
+                $this->store->countAnswer($mutation->id);
+            }
+            $this->store->abandon($mutation->id, $reason);
+        });
     }
 
     /**
@@ -634,7 +657,7 @@ class Outbox
                 if ($old->id !== $mutationId) {
                     continue;
                 }
-                if ((in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->sends($old->id) > 1) && ! $evenIfItMayHaveLanded) {
+                if ((in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->unanswered($old->id) > 0) && ! $evenIfItMayHaveLanded) {
                     // Sent again under a new identity, a write the server may
                     // already hold is applied twice - a create becomes two
                     // records. Only someone who has checked may say so.
@@ -642,7 +665,7 @@ class Outbox
                     // no answer, and the refusal came on a resend - a create
                     // the server applied, then refused to answer again once
                     // the user lost access, is a second record if requeued.
-                    throw new InvalidRequest(sprintf('Write %s may already be on the server (%s after %d sends); requeue it only after checking, with $evenIfItMayHaveLanded.', $mutationId, $entry['reason'], $this->store->sends($old->id)));
+                    throw new InvalidRequest(sprintf('Write %s may already be on the server (%s, %d sendings unanswered); requeue it only after checking, with $evenIfItMayHaveLanded.', $mutationId, $entry['reason'], $this->store->unanswered($old->id)));
                 }
                 $this->store->dismiss($old->id);
 
@@ -690,12 +713,15 @@ class Outbox
         $this->store->transaction(function () use ($mutationId, $references, $scopedBy): void {
             foreach ($this->store->abandoned() as $entry) {
                 $old = $entry['mutation'];
-                // Not a create that may have landed: its record probably
-                // exists, and the writes that need it are still good.
-                $mayHaveLanded = in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->sends($old->id) > 1;
-                if ($old->id === $mutationId && $old->kind === MutationKind::Create && ! $mayHaveLanded && $this->queuedCreate($old->entity->type, $old->entity->id) === null) {
+                if ($old->id === $mutationId && $old->kind === MutationKind::Create && $this->queuedCreate($old->entity->type, $old->entity->id) === null) {
+                    // Whether or not the record exists, this device never
+                    // learned its name, so the writes that need it would go
+                    // out carrying a handle the server never heard of. When it
+                    // may exist they are parent_unknown: find it, then requeue
+                    // them under its name.
+                    $mayHaveLanded = in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->unanswered($old->id) > 0;
                     foreach ($this->dependents($old->entity, $references, $scopedBy) as $dependent) {
-                        $this->store->abandon($dependent->id, 'parent_abandoned');
+                        $this->store->abandon($dependent->id, $mayHaveLanded ? 'parent_unknown' : 'parent_abandoned');
                     }
                 }
             }

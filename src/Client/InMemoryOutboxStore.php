@@ -157,7 +157,17 @@ class InMemoryOutboxStore implements OutboxStore
         $this->sends[$mutationId] = ($this->sends[$mutationId] ?? 0) + 1;
     }
 
-    public function sends(string $mutationId): int
+    public function countAnswer(string $mutationId): void
+    {
+        $this->sends[$mutationId] = max(0, ($this->sends[$mutationId] ?? 0) - 1);
+    }
+
+    public function clearSends(string $mutationId): void
+    {
+        unset($this->sends[$mutationId]);
+    }
+
+    public function unanswered(string $mutationId): int
     {
         return $this->sends[$mutationId] ?? 0;
     }

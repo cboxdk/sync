@@ -60,3 +60,32 @@ it('answers a duplicate from its receipt even when the host read before the lock
     expect($delivered->status)->toBe(MutationStatus::Applied)
         ->and($duplicate)->toEqual($delivered);
 });
+
+/**
+ * The same stale snapshot hid a device's previous write from the next one
+ * depending on it, which was then judged in conflict with the device's own
+ * edit and not applied.
+ */
+it('sees a dependency committed after the host read, and inherits what it knew', function () {
+    $dsn = (string) (getenv('SYNC_DSN') ?: '');
+    if (! str_starts_with($dsn, 'mysql:')) {
+        $this->markTestSkipped('The stale snapshot is MySQL\'s.');
+    }
+    $shared = $this->databaseStore() ?? throw new LogicException('expected a database');
+    $host = new PDO($dsn, (string) (getenv('SYNC_DB_USER') ?: '') ?: null, (string) (getenv('SYNC_DB_PASSWORD') ?: '') ?: null);
+    $host->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+    $key = new EntityKey('team', 'notes', 'n1');
+    $device = new Replica('device');
+    $engine = new Engine($shared);
+    $engine->process(new Mutation('m1', $key, $device, new MutationSequence(1), MutationKind::Create, new RecordVersion(0), [Op::set('title', 'a')]));
+
+    $host->exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    $host->exec('START TRANSACTION');
+    $host->query('SELECT COUNT(*) FROM sync_receipts')->fetchColumn();
+    $engine->process(new Mutation('m2', $key, $device, new MutationSequence(2), MutationKind::Update, new RecordVersion(1), [Op::set('title', 'b')]));
+    $third = (new Engine(new HostOwnedStore($host)))->process(new Mutation('m3', $key, $device, new MutationSequence(3), MutationKind::Update, new RecordVersion(1), [Op::set('title', 'c')], dependsOn: 'm2'));
+    $host->exec('COMMIT');
+
+    expect($third->status)->toBe(MutationStatus::Applied);
+});

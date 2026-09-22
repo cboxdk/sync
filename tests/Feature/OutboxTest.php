@@ -674,7 +674,7 @@ it('settles every type on a restored stream from before streams were split', fun
 })->with(outboxStores());
 
 /** A create that may have landed probably exists; dismissing its report must not abandon the edits that need it. */
-it('keeps the edits of a dismissed create that may have landed', function (OutboxStore $store) {
+it('holds back the edits of a dismissed create that may have landed as parent_unknown', function (OutboxStore $store) {
     $outbox = outboxFor($store);
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
     $edit = $outbox->queue(note('a'), MutationKind::Update, [Op::set('t', 'b')], 1);
@@ -683,8 +683,11 @@ it('keeps the edits of a dismissed create that may have landed', function (Outbo
 
     $outbox->dismiss($create->id);
 
-    expect($outbox->abandoned())->toBe([])
-        ->and($outbox->head()?->id)->toBe($edit->id);
+    // It may exist, but this device never learned its name: its edits would
+    // go out under a handle the server never heard of.
+    expect($outbox->abandoned())->toHaveCount(1)
+        ->and($outbox->abandoned()[0]['mutation']->id)->toBe($edit->id)
+        ->and($outbox->abandoned()[0]['reason'])->toBe('parent_unknown');
 })->with(outboxStores());
 
 /**
@@ -699,8 +702,39 @@ it('treats a write refused on a resend as one that may have landed', function (O
     $outbox->head(); // the resend, after an answer that never came
     $outbox->abandon($write, 'forbidden');
 
-    expect($store->sends($write->id))->toBe(2)
+    expect($store->unanswered($write->id))->toBe(1)
         ->and(fn () => $outbox->requeue($write->id))->toThrow(InvalidRequest::class);
+})->with(outboxStores());
+
+/**
+ * An answered sending did not land, whatever it said - "busy", "sign in
+ * again" - and a gap proves nothing landed at all. Counting those as possible
+ * landings blocked a user's legitimate requeue and turned off the cascade that
+ * stops orphaned children.
+ */
+it('counts only sendings that got no answer as possibly landed', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $write = $outbox->head() ?? throw new LogicException('expected a');
+    $outbox->answered($write); // 401: sign in again
+    $outbox->head();
+    $outbox->answered($write); // 503: busy
+    $outbox->head();
+    $outbox->abandon($write, 'forbidden');
+
+    expect($store->unanswered($write->id))->toBe(0)
+        ->and($outbox->requeue($write->id))->not->toBeNull();
+})->with(outboxStores());
+
+it('forgets unanswered sendings once a gap proves none of them landed', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $store->setAcknowledged($outbox->stream(note('a')), 'team-1', 3);
+    $write = $outbox->head() ?? throw new LogicException('expected a');
+    $outbox->head(); // its answer was lost
+    $outbox->resumeAfter($write, 0);
+
+    expect($store->unanswered($write->id))->toBe(0);
 })->with(outboxStores());
 
 /** Dismissing through the outbox directly, without the relations, used to release a refused parent's children with its handle. */

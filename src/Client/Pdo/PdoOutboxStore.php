@@ -264,7 +264,17 @@ class PdoOutboxStore implements OutboxStore
         $this->run('UPDATE sync_outbox SET sends = sends + 1 WHERE mutation_id = ?', [$mutationId]);
     }
 
-    public function sends(string $mutationId): int
+    public function countAnswer(string $mutationId): void
+    {
+        $this->run('UPDATE sync_outbox SET sends = sends - 1 WHERE mutation_id = ? AND sends > 0', [$mutationId]);
+    }
+
+    public function clearSends(string $mutationId): void
+    {
+        $this->run('UPDATE sync_outbox SET sends = 0 WHERE mutation_id = ?', [$mutationId]);
+    }
+
+    public function unanswered(string $mutationId): int
     {
         return (int) ($this->scalar('SELECT sends FROM sync_outbox WHERE mutation_id = ?', [$mutationId]) ?? '0');
     }
@@ -422,7 +432,13 @@ class PdoOutboxStore implements OutboxStore
                 // one had just sent and numbered a second write the same.
                 $this->pdo->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
             }
-            $this->pdo->exec($driver === 'sqlite' ? 'BEGIN IMMEDIATE' : 'BEGIN');
+            try {
+                // SQLite waits for its write lock here, and that is where it
+                // is busy.
+                $this->pdo->exec($driver === 'sqlite' ? 'BEGIN IMMEDIATE' : 'BEGIN');
+            } catch (\PDOException $failure) {
+                throw self::isContention($failure) ? new TransientFailure('The outbox is busy; try again', previous: $failure) : $failure;
+            }
             try {
                 $result = $callback();
                 $this->pdo->exec('COMMIT');

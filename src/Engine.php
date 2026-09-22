@@ -358,7 +358,11 @@ class Engine
         if ($mutation->dependsOn === null) {
             return [];
         }
-        $previous = $ledger->receipt($mutation->dependsOn);
+        // Again as the latest committed state if this transaction's snapshot
+        // predates it: a host transaction that read before the space lock
+        // missed the device's previous write, and judged the next one in
+        // conflict with it.
+        $previous = $ledger->receipt($mutation->dependsOn) ?? $ledger->receiptOf($mutation->replica, $mutation->dependsOn, $mutation->sequence->value);
         if ($previous === null) {
             // Unknown - never processed, or its receipt pruned with the log.
             // Either way there is no knowledge to inherit, and inheriting none

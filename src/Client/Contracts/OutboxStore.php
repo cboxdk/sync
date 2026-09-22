@@ -158,12 +158,17 @@ interface OutboxStore
     /** Count one sending of this write - the first, and every resend of it. */
     public function countSend(string $mutationId): void;
 
+    /** One sending of this write got an answer, so it is accounted for. Never below zero. */
+    public function countAnswer(string $mutationId): void;
+
+    /** An answer proved the server holds nothing for this write: no sending of it landed. */
+    public function clearSends(string $mutationId): void;
+
     /**
-     * How many times this write has gone out. More than once means an
-     * earlier attempt got no answer, so it may be on the server whatever the
-     * last answer said.
+     * How many sendings of this write got no answer at all. Any, and the write
+     * may be on the server whatever the last answer said.
      */
-    public function sends(string $mutationId): int;
+    public function unanswered(string $mutationId): int;
 
     /**
      * Every write still queued on one stream, whatever its type - a stream

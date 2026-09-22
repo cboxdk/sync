@@ -40,6 +40,14 @@ interface Ledger
     public function receiptAt(Replica $replica, int $sequence): ?Receipt;
 
     /**
+     * An earlier answer on this stream by its mutation id - one this
+     * transaction's snapshot may predate - read as the latest committed state
+     * and only within this space's stream positions below $before.
+     * Implementations without snapshots answer from what they hold.
+     */
+    public function receiptOf(Replica $replica, string $mutationId, int $before): ?Receipt;
+
+    /**
      * Replace the stored answer of a mutation this space already processed -
      * for a write the host made as a direct consequence of it, whose versions
      * the writer has to count as its own.

@@ -47,6 +47,21 @@ class PdoLedger implements Ledger
         return $payload === null ? null : Payload::decode($payload, Receipt::class);
     }
 
+    public function receiptOf(Replica $replica, string $mutationId, int $before): ?Receipt
+    {
+        if (! $this->lockingReads || $this->schema->driver !== PdoSchema::MYSQL) {
+            return $this->receipt($mutationId);
+        }
+        // Through the stream's own positions, so what the locking read locks
+        // is this stream's range in this space - not the gap in the global
+        // mutation id index that every other tenant inserts into.
+        $statement = $this->connection->prepare('SELECT payload FROM sync_receipts FORCE INDEX (sync_receipts_position) WHERE space = ? AND replica_id = ? AND sequence < ? AND mutation_id = ? FOR SHARE');
+        $statement->execute([$this->space, $replica->id, $before, $mutationId]);
+        $value = $statement->fetchColumn();
+
+        return is_string($value) ? Payload::decode($value, Receipt::class) : null;
+    }
+
     public function receiptAt(Replica $replica, int $sequence): ?Receipt
     {
         $sql = 'SELECT payload FROM sync_receipts WHERE space = ? AND replica_id = ? AND sequence = ?';
