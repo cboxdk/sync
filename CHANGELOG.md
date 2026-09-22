@@ -17,6 +17,7 @@
 
 - **Run `migrate()` - or `PdoSchema::forConnection($pdo)->install($pdo)` from your own migration - once after upgrading.** It adds the new receipt and stream columns and indexes, gives receipts from earlier releases their stream position, and on MySQL retypes identity columns to `utf8mb4_0900_bin`, which copies each table: run it in a maintenance window on a large installation. Until it has run, writes fail.
 - A device's `PdoOutboxStore::migrate()` adds its new columns in place on first use; writes queued before the upgrade count as sent once. Back the file up first; downgrading is not supported.
+- `Outbox::queue()` refuses a create whose handle the device already uses for a record in another space. An application that gave records in different tenants the same local id has to give each its own - a UUID.
 - `Outbox::abandon()` runs in its own outbox transaction now; do not call it inside one of yours on the same connection.
 - A device keeps sending writes queued before the upgrade on the stream they were queued on, so their retries and `depends_on` still match. `OutboxStore` implementations outside this package need the new methods, and the PDO outbox gains an `entity_id` column in place.
 - Format-2 payloads cannot be read by 0.8.x; a downgrade after writing is refused by name.
