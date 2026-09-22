@@ -1020,6 +1020,38 @@ it('finds a record\'s create without reading the record\'s own edits', function 
     expect($large)->toBeLessThan(max($small * 2.5, 5.0));
 });
 
+/** A scope's rename moved the writes but left the names recorded under it, so a requeued edit went to the handle again. */
+it('moves recorded names along when their scope is named', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('P', 'tasks', 'T'), MutationKind::Create, [Op::set('t', 'x')], 0);
+    $outbox->acknowledged($outbox->head('tasks') ?? throw new LogicException('expected T'), new EntityKey('P', 'tasks', 'T9'));
+
+    $outbox->relabel('tasks', 'P', '42');
+
+    expect($store->nameOf(new EntityKey('42', 'tasks', 'T'))?->id)->toBe('T9')
+        ->and($store->nameOf(new EntityKey('P', 'tasks', 'T')))->toBeNull();
+})->with(outboxStores());
+
+/** Looking for a record's abandoned create read every row of the record, once per edit sent. */
+it('finds a record\'s abandoned create without reading its edits', function () {
+    $timed = function (int $edits): float {
+        $store = new PdoOutboxStore(new PDO('sqlite::memory:'));
+        $store->migrate();
+        $outbox = outboxFor($store);
+        foreach (range(1, $edits) as $n) {
+            $outbox->queue(note('busy'), MutationKind::Update, [Op::set('t', (string) $n)], 1);
+        }
+        $started = hrtime(true);
+        foreach (range(1, 300) as $ignored) {
+            $outbox->orphanReason('notes', 'busy');
+        }
+
+        return (hrtime(true) - $started) / 1e6;
+    };
+
+    expect($timed(4000))->toBeLessThan(max($timed(1000) * 2.5, 5.0));
+});
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);

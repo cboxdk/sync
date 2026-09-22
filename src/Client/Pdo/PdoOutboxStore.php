@@ -157,7 +157,7 @@ class PdoOutboxStore implements OutboxStore
         // Found by index on the id column; a row queued before that column
         // existed has NULL there and is matched by decoding it.
         $rows = $this->rows(
-            'SELECT mutation_id, payload FROM sync_outbox WHERE space = ? AND entity_type = ? AND (entity_id = ? OR entity_id IS NULL) AND abandoned_reason IS NULL',
+            'SELECT mutation_id, payload FROM sync_outbox WHERE space = ? AND entity_type = ? AND entity_id = ? AND abandoned_reason IS NULL',
             [$from->space, $from->type, $from->id],
         );
 
@@ -387,6 +387,8 @@ class PdoOutboxStore implements OutboxStore
         // Abandoned and dismissed writes too: they are records of the same
         // scope, and left under the old label a handle would name records in
         // two spaces.
+        // Names recorded under the old label belong to the same records.
+        $this->run('UPDATE sync_outbox_names SET space = ? WHERE entity_type = ? AND space = ?', [$to, $entityType, $from]);
         foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE entity_type = ? AND space = ?', [$entityType, $from]) as [$id, $payload]) {
             $mutation = Payload::decode($payload, Mutation::class);
             $this->run('UPDATE sync_outbox SET space = ?, payload = ? WHERE mutation_id = ?', [
@@ -411,7 +413,9 @@ class PdoOutboxStore implements OutboxStore
     {
         // Only a write still queued: a late refusal of one already abandoned,
         // or dismissed, keeps the first answer and is not reported again.
-        $this->run('UPDATE sync_outbox SET abandoned_reason = ? WHERE mutation_id = ? AND abandoned_reason IS NULL', [$reason, $mutationId]);
+        // Out of the in-flight range too, so every later hand-out on the
+        // stream does not walk past it.
+        $this->run('UPDATE sync_outbox SET abandoned_reason = ?, attempted = 0 WHERE mutation_id = ? AND abandoned_reason IS NULL', [$reason, $mutationId]);
     }
 
     public function dismiss(string $mutationId): void
@@ -427,7 +431,7 @@ class PdoOutboxStore implements OutboxStore
     public function abandonedCreate(string $entityType, string $entityId, ?string $space = null): ?array
     {
         // Reported before dismissed, then the one queued last.
-        $sql = 'SELECT payload, abandoned_reason FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NOT NULL';
+        $sql = "SELECT payload, abandoned_reason FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND kind = 'create' AND abandoned_reason IS NOT NULL";
         $bindings = [$entityType, $entityId];
         if ($space !== null) {
             $sql .= ' AND space = ?';

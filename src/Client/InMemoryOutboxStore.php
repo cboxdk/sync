@@ -53,7 +53,7 @@ class InMemoryOutboxStore implements OutboxStore
         $this->queue[] = $mutation;
     }
 
-    /** @var array<string, array<string, array<string, string>>> type => handle => space => name */
+    /** @var array<string, array<array-key, array<string, string>>> type => handle => space => name; a numeric handle is an integer key */
     private array $handles = [];
 
     public function rekey(EntityKey $from, EntityKey $to, bool $creates = true): void
@@ -235,6 +235,16 @@ class InMemoryOutboxStore implements OutboxStore
                 $this->queue[$index] = $mutation->withEntity(new EntityKey($to, $entityType, $mutation->entity->id));
             }
         }
+        // Names recorded under the old label belong to the same records.
+        foreach ($this->handles[$entityType] ?? [] as $handle => $spaces) {
+            if (array_key_exists($from, $spaces)) {
+                $named = $spaces[$from];
+                unset($this->handles[$entityType][$handle][$from]);
+                $this->handles[$entityType][$handle][$to] = $named;
+                unset($this->names[(new EntityKey($from, $entityType, (string) $handle))->key()]);
+                $this->names[(new EntityKey($to, $entityType, (string) $handle))->key()] = new EntityKey($to, $entityType, $named);
+            }
+        }
         // Abandoned and dismissed writes too: they are records of the same
         // scope, and left under the old label a handle would name records in
         // two spaces.
@@ -263,6 +273,8 @@ class InMemoryOutboxStore implements OutboxStore
 
     public function abandon(string $mutationId, string $reason): void
     {
+        // Out of the in-flight set, as the durable store does.
+        unset($this->attempted[$mutationId]);
         foreach ($this->queue as $mutation) {
             if ($mutation->id === $mutationId) {
                 $this->abandoned[] = ['mutation' => $mutation, 'reason' => $reason];
