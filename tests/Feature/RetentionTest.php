@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Exceptions\HistoryUnavailable;
+use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Persistence\InMemoryStore;
 use Cbox\Sync\Tests\Fixtures\ViewScenario;
 use Cbox\Sync\ValueObjects\CommitSequence;
@@ -71,4 +72,34 @@ it('turns a pruned view cursor into a typed reset rather than an error', functio
     } catch (ResetRequired $reset) {
         expect($reset->reason)->toBe(ResetReason::HistoryPruned);
     }
+});
+
+/**
+ * The log was bounded by prune(); the receipts were not - one per mutation,
+ * for ever. They go with the commits they were written in.
+ */
+it('prunes the receipts written in the commits it drops, and keeps the rest', function () {
+    $this->seedRecord();
+    foreach (range(1, 4) as $sequence) {
+        $this->write('a', $sequence, [Op::set('title', 'title-'.$sequence)]);
+    }
+
+    $this->store->prune('test', new CommitSequence(4));
+
+    expect($this->store->receipt('seed-1'))->toBeNull()
+        ->and($this->store->receipt('a-2'))->toBeNull()
+        ->and($this->store->receipt('a-3'))->not->toBeNull()
+        ->and($this->store->receipt('a-4'))->not->toBeNull();
+});
+
+/** Past the horizon a replay cannot be answered, and says so rather than applying twice. */
+it('refuses a replay whose receipt was pruned instead of applying it again', function () {
+    $this->seedRecord();
+    $this->write('a', 1, [Op::set('title', 'once')]);
+    $this->write('a', 2, [Op::set('title', 'twice')], base: 2);
+    $this->store->prune('test', new CommitSequence(3));
+
+    expect(fn () => $this->write('a', 1, [Op::set('title', 'once')]))
+        ->toThrow(ProtocolException::class);
+    expect($this->record()->value('title')->value())->toBe('twice');
 });

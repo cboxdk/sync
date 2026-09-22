@@ -155,9 +155,16 @@ that grows without bound and a host had no supported way to reach it.
 `ResetRequired(HistoryPruned)` so a client re-bootstraps instead of silently
 skipping history.
 
-Acknowledgement rows are one per replica per space and must not be pruned while
-that replica may return: the acknowledgement is what makes a replayed mutation
-safe.
+Receipts go with the commits they were written in, so pruning bounds them too.
+A receipt is what answers a replayed mutation; a device that lost a response and
+stays away past the horizon is refused as reusing a sequence when it retries, and
+has to treat that write as final without knowing how it ended. Keep enough
+history to outlast the longest a device can be away with an unanswered push.
+Receipts written before this column existed have no commit number and are kept.
+
+What stays after pruning is bounded by your data, not by time: the live records
+and their field index, open and resolved conflict groups, and one acknowledgement
+row per device stream per space - which is what refuses a reused sequence at all.
 
 ## What is proven, and what is not
 

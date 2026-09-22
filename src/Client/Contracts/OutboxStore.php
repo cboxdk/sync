@@ -114,6 +114,13 @@ interface OutboxStore
     public function pending(?string $entityType = null): int;
 
     /**
+     * Every mutation still queued, oldest first.
+     *
+     * @return list<Mutation>
+     */
+    public function queued(): array;
+
+    /**
      * @template TResult
      *
      * @param  \Closure(): TResult  $callback

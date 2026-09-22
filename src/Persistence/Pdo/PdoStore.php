@@ -209,6 +209,7 @@ class PdoStore implements Store
         $this->transaction($space, function () use ($space, $from): bool {
             $this->run('UPDATE sync_spaces SET retained_from = ? WHERE space = ? AND retained_from < ?', [$from->value, $space, $from->value]);
             $this->run('DELETE FROM sync_commits WHERE space = ? AND sequence < ?', [$space, $from->value]);
+            $this->run('DELETE FROM sync_receipts WHERE space = ? AND commit_sequence < ?', [$space, $from->value]);
 
             return true;
         });

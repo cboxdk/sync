@@ -93,8 +93,15 @@ interface Store
      * rather than served a gap: prune only past what every device has already
      * acknowledged, or accept that the slow ones re-bootstrap.
      *
-     * Acknowledgement rows are NOT pruned by this. They are what makes a
-     * replayed mutation safe, and one is kept per replica per space.
+     * Receipts written in the dropped commits go with them. A receipt is what
+     * answers a replayed mutation, so a device that retries one after this
+     * point - it lost the response and stayed away past the horizon - is told
+     * its sequence was already used, and must treat the write as final
+     * without knowing how it ended. Keep enough history to outlast the
+     * longest a device can be away with an unanswered push.
+     *
+     * Acknowledgement rows are NOT pruned by this: one per replica per space,
+     * and they are what refuses a reused sequence at all.
      */
     public function prune(string $space, CommitSequence $from): void;
 }

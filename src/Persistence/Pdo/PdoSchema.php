@@ -317,10 +317,16 @@ class PdoSchema
                 'columns' => [
                     "mutation_id $name NOT NULL",
                     "space $name NOT NULL",
+                    // The commit the receipt was written in, so pruning the log
+                    // can prune the receipts with it. Nullable: a receipt from
+                    // before the column existed has none, and is kept.
+                    'commit_sequence BIGINT NULL',
                     "payload $text NOT NULL",
                 ],
                 'primaryKey' => ['mutation_id'],
-                'indexes' => [],
+                'indexes' => [
+                    ['name' => 'sync_receipts_retention', 'unique' => false, 'columns' => ['space', 'commit_sequence']],
+                ],
             ],
             [
                 'name' => 'sync_streams',

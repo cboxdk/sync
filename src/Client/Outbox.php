@@ -170,15 +170,59 @@ class Outbox
      * the acknowledgement: in two, a crash between them removed the create and
      * left updates addressed to a handle nothing could resolve any more.
      */
-    public function acknowledged(Mutation $mutation, ?EntityKey $named = null): void
+    /**
+     * @param  array<string, list<string>>  $references  entity type => fields that hold
+     *                                                   another record's id, rewritten too
+     */
+    public function acknowledged(Mutation $mutation, ?EntityKey $named = null, array $references = []): void
     {
-        $this->store->transaction(function () use ($mutation, $named): void {
+        $this->store->transaction(function () use ($mutation, $named, $references): void {
             $this->store->setAcknowledged($this->stream($mutation->entity), $mutation->entity->space, $mutation->sequence->value);
             $this->store->acknowledge($mutation->id);
             if ($named !== null && ! $named->equals($mutation->entity)) {
                 $this->store->rekey($mutation->entity, $named);
+                $this->rewriteReferences($mutation->entity->id, $named->id, $references);
             }
         });
+    }
+
+    /**
+     * Point queued writes that refer to a handle at the name it became.
+     *
+     * A child created offline under a parent that was also created offline
+     * carries the parent's HANDLE in a field. The key rename cannot reach it -
+     * no queue can know which fields are references - so the application says
+     * which ones are, and they are rewritten in the same step, before the child
+     * is sent. Without it the child reaches the server pointing at an id that
+     * never existed.
+     *
+     * Only a value that is exactly the handle is touched.
+     *
+     * @param  array<string, list<string>>  $references
+     */
+    private function rewriteReferences(string $handle, string $name, array $references): void
+    {
+        if ($references === []) {
+            return;
+        }
+        foreach ($this->store->queued() as $queued) {
+            $fields = $references[$queued->entity->type] ?? [];
+            if ($fields === []) {
+                continue;
+            }
+            $changed = false;
+            $operations = [];
+            foreach ($queued->operations as $operation) {
+                if (in_array($operation->field, $fields, true) && $operation->value->exists && $operation->value->value() === $handle) {
+                    $operation = FieldOperation::set($operation->field, $name);
+                    $changed = true;
+                }
+                $operations[] = $operation;
+            }
+            if ($changed) {
+                $this->store->replace($queued->rebased($queued->baseVersion, $operations));
+            }
+        }
     }
 
     /** What a record this device created under a handle is actually called; null until the server has said. */

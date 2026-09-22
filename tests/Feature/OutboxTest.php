@@ -417,3 +417,27 @@ it('rolls the rename back with the acknowledgement when the step fails', functio
         ->and($outbox->head()?->id)->toBe($create->id)
         ->and($outbox->nameOf($handle))->toBeNull();
 });
+
+/**
+ * A task created offline under a project also created offline carries the
+ * project's handle. Renamed in the same step as the project's
+ * acknowledgement, the task goes out pointing at the project's real id.
+ */
+it('rewrites fields that reference a created record, when told which fields do', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $project = new EntityKey('team-1', 'projects', 'project-handle');
+    $outbox->queue($project, MutationKind::Create, [Op::set('name', 'Launch')], 0);
+    $outbox->queue(new EntityKey('team-1', 'tasks', 'task-handle'), MutationKind::Create, [Op::set('project_id', 'project-handle'), Op::set('title', 'project-handle')], 0);
+    $create = $outbox->head() ?? throw new LogicException('expected a head');
+
+    $outbox->acknowledged($create, new EntityKey('team-1', 'projects', 'project-real'), ['tasks' => ['project_id']]);
+
+    $task = $outbox->head('tasks') ?? throw new LogicException('expected the task');
+    $values = [];
+    foreach ($task->operations as $operation) {
+        $values[$operation->field] = $operation->value->value();
+    }
+    // The declared reference is rewritten; a field that merely happens to
+    // hold the same text is not.
+    expect($values)->toBe(['project_id' => 'project-real', 'title' => 'project-handle']);
+})->with(outboxStores());

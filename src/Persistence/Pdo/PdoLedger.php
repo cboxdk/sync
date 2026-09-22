@@ -117,8 +117,8 @@ class PdoLedger implements Ledger
     public function putReceipt(Receipt $receipt): void
     {
         try {
-            $this->run('INSERT INTO sync_receipts (mutation_id, space, payload) VALUES (?, ?, ?)', [
-                $receipt->mutation->id, $this->space, Payload::encode($receipt),
+            $this->run('INSERT INTO sync_receipts (mutation_id, space, commit_sequence, payload) VALUES (?, ?, ?, ?)', [
+                $receipt->mutation->id, $this->space, $receipt->result->commitSequence?->value, Payload::encode($receipt),
             ]);
         } catch (\PDOException $exception) {
             // Only a genuine duplicate. Catching every PDOException here

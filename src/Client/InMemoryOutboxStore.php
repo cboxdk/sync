@@ -138,6 +138,11 @@ class InMemoryOutboxStore implements OutboxStore
         return count(array_filter($this->queue, fn (Mutation $m): bool => $m->entity->type === $entityType));
     }
 
+    public function queued(): array
+    {
+        return $this->queue;
+    }
+
     public function transaction(\Closure $callback): mixed
     {
         if ($this->active) {

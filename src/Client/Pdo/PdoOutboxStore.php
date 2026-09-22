@@ -205,6 +205,16 @@ class PdoOutboxStore implements OutboxStore
         return (int) ($this->scalar('SELECT COUNT(*) FROM sync_outbox WHERE abandoned_reason IS NULL AND entity_type = ?', [$entityType]) ?? '0');
     }
 
+    public function queued(): array
+    {
+        $mutations = [];
+        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE abandoned_reason IS NULL ORDER BY queued_at, mutation_id', []) as $row) {
+            $mutations[] = Payload::decode($row[1], Mutation::class);
+        }
+
+        return $mutations;
+    }
+
     public function transaction(\Closure $callback): mixed
     {
         if ($this->active) {

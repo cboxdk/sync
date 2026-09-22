@@ -206,7 +206,18 @@ class InMemoryStore implements Inspectable, Store
             }
         }
         $this->state->commits[$space] = $retained;
+        foreach ($this->state->receipts as $id => $receipt) {
+            $sequence = $receipt->result->commitSequence;
+            if ($sequence !== null && $sequence->value < $from->value && $this->receiptSpace($receipt) === $space) {
+                unset($this->state->receipts[$id]);
+            }
+        }
         $this->state->retainedFrom[$space] = max($this->state->retainedFrom[$space] ?? 1, $from->value);
+    }
+
+    private function receiptSpace(Receipt $receipt): string
+    {
+        return $receipt->mutation->entity->space;
     }
 
     public function pull(string $space, int $after = 0, int $limit = 100): PullPage
