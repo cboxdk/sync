@@ -542,6 +542,22 @@ class Outbox
     }
 
     /**
+     * The server processed the write and refused it - rejected, invalid, a
+     * precondition that failed. Its position is acknowledged like any answer,
+     * and it is kept as abandoned under that reason rather than dropped: the
+     * push's own report of it is lost the moment anything after it fails or
+     * the process dies, and a refused create has to go on holding back the
+     * writes that depend on it.
+     */
+    public function refused(Mutation $mutation, string $reason): void
+    {
+        $this->store->transaction(function () use ($mutation, $reason): void {
+            $this->store->setAcknowledged($mutation->replica, $mutation->entity->space, $mutation->sequence->value);
+            $this->store->abandon($mutation->id, $reason);
+        });
+    }
+
+    /**
      * Terminal for this mutation: it can never be sent again under this
      * identity, so it leaves the queue rather than blocking everything behind
      * it forever. The application has to be told.
@@ -565,13 +581,19 @@ class Outbox
      * @param  array<string, array<string, string>>  $references  as for acknowledged()
      * @param  array<string, string>  $scopedBy  as for acknowledged()
      */
-    public function requeue(string $mutationId, array $references = [], array $scopedBy = []): ?Mutation
+    public function requeue(string $mutationId, array $references = [], array $scopedBy = [], bool $evenIfItMayHaveLanded = false): ?Mutation
     {
-        return $this->store->transaction(function () use ($mutationId, $references, $scopedBy): ?Mutation {
+        return $this->store->transaction(function () use ($mutationId, $references, $scopedBy, $evenIfItMayHaveLanded): ?Mutation {
             foreach ($this->store->abandoned() as $entry) {
                 $old = $entry['mutation'];
                 if ($old->id !== $mutationId) {
                     continue;
+                }
+                if (in_array($entry['reason'], self::MAY_HAVE_LANDED, true) && ! $evenIfItMayHaveLanded) {
+                    // Sent again under a new identity, a write the server may
+                    // already hold is applied twice - a create becomes two
+                    // records. Only someone who has checked may say so.
+                    throw new InvalidRequest(sprintf('Write %s may already be on the server (%s); requeue it only after checking, with $evenIfItMayHaveLanded.', $mutationId, $entry['reason']));
                 }
                 $this->store->dismiss($old->id);
 
@@ -597,10 +619,73 @@ class Outbox
         });
     }
 
-    /** The application has told the user; stop reporting it. */
-    public function dismiss(string $mutationId): void
+    /** Refusals after which the write may nonetheless be on the server. */
+    private const MAY_HAVE_LANDED = ['receipt_pruned', 'protocol_violation'];
+
+    /**
+     * The application has told the user; stop reporting it.
+     *
+     * A dismissed create takes the writes that depend on it along: the record
+     * will never exist, and once its abandoned entry is gone nothing else says
+     * so - its edits, and children pointing at it or living under it, would go
+     * out carrying a handle the server never heard of. They are abandoned as
+     * parent_abandoned, for the application to report in turn.
+     *
+     * @param  array<string, array<string, string>>  $references  as for acknowledged()
+     * @param  array<string, string>  $scopedBy  as for acknowledged()
+     */
+    public function dismiss(string $mutationId, array $references = [], array $scopedBy = []): void
     {
-        $this->store->dismiss($mutationId);
+        $this->store->transaction(function () use ($mutationId, $references, $scopedBy): void {
+            foreach ($this->store->abandoned() as $entry) {
+                $old = $entry['mutation'];
+                if ($old->id === $mutationId && $old->kind === MutationKind::Create && $this->queuedCreate($old->entity->type, $old->entity->id) === null) {
+                    foreach ($this->dependents($old->entity, $references, $scopedBy) as $dependent) {
+                        $this->store->abandon($dependent->id, 'parent_abandoned');
+                    }
+                }
+            }
+            $this->store->dismiss($mutationId);
+        });
+    }
+
+    /**
+     * Unsent writes that need this record to exist: its own edits, records
+     * living under it, records whose declared references point at it.
+     *
+     * @param  array<string, array<string, string>>  $references
+     * @param  array<string, string>  $scopedBy
+     * @return list<Mutation>
+     */
+    private function dependents(EntityKey $record, array $references, array $scopedBy): array
+    {
+        $types = [$record->type];
+        foreach ($scopedBy as $type => $parentType) {
+            if ($parentType === $record->type) {
+                $types[] = $type;
+            }
+        }
+        foreach ($references as $type => $fields) {
+            if (in_array($record->type, $fields, true)) {
+                $types[] = $type;
+            }
+        }
+        $found = [];
+        foreach ($this->store->queued(array_values(array_unique($types))) as $queued) {
+            $type = $queued->entity->type;
+            $depends = ($type === $record->type && $queued->entity->id === $record->id && $queued->entity->space === $record->space)
+                || (($scopedBy[$type] ?? null) === $record->type && $queued->entity->space === $record->id);
+            foreach ($queued->operations as $operation) {
+                if (($references[$type][$operation->field] ?? null) === $record->type && $operation->value->exists && $operation->value->value() === $record->id) {
+                    $depends = true;
+                }
+            }
+            if ($depends) {
+                $found[] = $queued;
+            }
+        }
+
+        return $found;
     }
 
     /** @return list<array{mutation: Mutation, reason: string}> */

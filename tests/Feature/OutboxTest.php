@@ -602,6 +602,52 @@ it('numbers a write an earlier release left in flight the way that release would
     expect($outbox->head()?->sequence->value)->toBe(8);
 });
 
+/** A refused write is kept, under its reason, not dropped with the push's report of it. */
+it('keeps a refused write as abandoned and moves the stream on', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->queue(note('b'), MutationKind::Create, [Op::set('t', 'b')], 0);
+
+    $outbox->refused($outbox->head() ?? throw new LogicException('expected a'), 'validation_failed');
+
+    expect($outbox->abandoned()[0]['reason'])->toBe('validation_failed')
+        ->and($outbox->createAbandoned('notes', 'a'))->toBeTrue()
+        ->and($outbox->head()?->sequence->value)->toBe(2);
+})->with(outboxStores());
+
+/** Once a refused create is dismissed nothing else said the record will never exist; its dependants went out with its handle. */
+it('takes a dismissed create\'s dependants with it', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'p')], 0);
+    $edit = $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Update, [Op::set('t', 'q')], 0);
+    $child = $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p')], 0);
+    $nested = $outbox->queue(new EntityKey('p', 'items', 'i'), MutationKind::Create, [Op::set('t', 'i')], 0);
+    $other = $outbox->queue(new EntityKey('team-1', 'tasks', 'u'), MutationKind::Create, [Op::set('project_id', 'elsewhere')], 0);
+    $create = $outbox->head('projects') ?? throw new LogicException('expected the create');
+    $outbox->refused($create, 'forbidden');
+
+    $outbox->dismiss($create->id, ['tasks' => ['project_id' => 'projects']], ['items' => 'projects']);
+
+    $reasons = [];
+    foreach ($outbox->abandoned() as $entry) {
+        $reasons[$entry['mutation']->id] = $entry['reason'];
+    }
+    expect($reasons)->toBe([$edit->id => 'parent_abandoned', $child->id => 'parent_abandoned', $nested->id => 'parent_abandoned'])
+        ->and($outbox->pending())->toBe(1)
+        ->and($outbox->head('tasks')?->id)->toBe($other->id);
+})->with(outboxStores());
+
+/** A write that may already be on the server is not sent again under a new identity without someone saying so. */
+it('refuses to requeue a write that may already have landed', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $write = $outbox->head() ?? throw new LogicException('expected a');
+    $outbox->settledUnknown($write);
+
+    expect(fn () => $outbox->requeue($write->id))->toThrow(InvalidRequest::class)
+        ->and($outbox->requeue($write->id, evenIfItMayHaveLanded: true))->not->toBeNull();
+})->with(outboxStores());
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
