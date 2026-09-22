@@ -94,9 +94,20 @@ class Outbox
      */
     public function head(?string $entityType = null, ?string $space = null): ?Mutation
     {
-        $mutation = $this->store->head($entityType, $space);
+        // Once more if what was at the head was sent by another process in
+        // the meantime.
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $mutation = $this->store->head($entityType, $space);
+            if ($mutation === null) {
+                return null;
+            }
+            $handed = $this->handOut($mutation);
+            if ($handed !== null) {
+                return $handed;
+            }
+        }
 
-        return $mutation === null ? null : $this->handOut($mutation);
+        return null;
     }
 
     /**
@@ -132,7 +143,7 @@ class Outbox
      * on the server, and a lost response then made one of the two look like a
      * reused identity - abandoned, although it had landed.
      */
-    private function handOut(Mutation $mutation): Mutation
+    private function handOut(Mutation $mutation): ?Mutation
     {
         // The stream it was queued on. A write queued before streams existed
         // carries the bare device id and goes out on that stream, numbered as
@@ -140,10 +151,19 @@ class Outbox
         $stream = $mutation->replica;
         $space = $mutation->entity->space;
 
-        return $this->store->transaction(function () use ($mutation, $stream, $space): Mutation {
+        return $this->store->transaction(function () use ($mutation, $stream, $space): ?Mutation {
+            $this->store->lockStream($stream, $space);
             $waiting = $this->store->inFlight($stream, $space);
             if ($waiting !== null) {
                 return $waiting;
+            }
+            // Read again inside the transaction: another process may have
+            // renamed it, rewritten a reference in it, or sent it and had it
+            // acknowledged since it was looked up - and handing out the copy
+            // read before would undo that, or send it twice.
+            $mutation = $this->store->find($mutation->id);
+            if ($mutation === null) {
+                return null;
             }
             $numbered = new Mutation(
                 $mutation->id,

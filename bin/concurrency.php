@@ -31,7 +31,7 @@ use Cbox\Sync\ValueObjects\Replica;
 /** @return array<string, string> */
 function options(): array
 {
-    $options = ['dsn' => '', 'user' => '', 'password' => '', 'writers' => '4', 'mutations' => '25', 'worker' => ''];
+    $options = ['dsn' => '', 'user' => '', 'password' => '', 'writers' => '4', 'mutations' => '25', 'worker' => '', 'spaces' => 'shared'];
     /** @var list<string> $arguments */
     $arguments = array_slice(is_array($GLOBALS['argv'] ?? null) ? $GLOBALS['argv'] : [], 1);
     foreach ($arguments as $argument) {
@@ -57,13 +57,18 @@ function connect(string $dsn, string $user, string $password): PdoStore
 }
 
 $options = options();
-$space = 'concurrency';
+// shared: every writer in one space - the serialized path.
+// separate: one space each - writers that must not block one another at all.
+$separate = $options['spaces'] === 'separate';
+$spaceOf = fn (string $worker): string => $separate ? 'concurrency-'.$worker : 'concurrency';
 $mutations = max(1, (int) $options['mutations']);
 
 if ($options['worker'] !== '') {
     $store = connect($options['dsn'], $options['user'], $options['password']);
     $engine = new Engine($store);
     $worker = $options['worker'];
+    $space = $spaceOf($worker);
+    $retries = 0;
     for ($sequence = 1; $sequence <= $mutations; $sequence++) {
         $entity = new EntityKey($space, 'notes', $worker.'-'.$sequence);
         $mutation = new Mutation(
@@ -75,7 +80,10 @@ if ($options['worker'] !== '') {
             try {
                 $engine->process($mutation);
                 break;
-            } catch (TransientFailure|PDOException $contention) {
+            } catch (TransientFailure $contention) {
+                // Only what the store classifies as contention is retried. A
+                // raw driver exception here is a defect, and fails the run.
+                $retries++;
                 if ($attempt >= 50) {
                     fwrite(STDERR, "worker $worker gave up: ".$contention->getMessage()."\n");
                     exit(1);
@@ -84,6 +92,7 @@ if ($options['worker'] !== '') {
             }
         }
     }
+    echo $retries;
     exit(0);
 }
 
@@ -93,13 +102,15 @@ if ($options['dsn'] === '') {
 }
 $store = connect($options['dsn'], $options['user'], $options['password']);
 $store->migrate();
-requireEmptySpace($store, $space);
+for ($worker = 1; $worker <= (int) $options['writers']; $worker++) {
+    requireEmptySpace($store, $spaceOf('w'.$worker));
+}
 
 $processes = [];
 for ($worker = 1; $worker <= $writers; $worker++) {
     $command = sprintf(
-        '%s %s --worker=w%d --mutations=%d --dsn=%s --user=%s --password=%s',
-        escapeshellarg(PHP_BINARY), escapeshellarg(__FILE__), $worker, $mutations,
+        '%s %s --worker=w%d --mutations=%d --spaces=%s --dsn=%s --user=%s --password=%s',
+        escapeshellarg(PHP_BINARY), escapeshellarg(__FILE__), $worker, $mutations, escapeshellarg($options['spaces']),
         escapeshellarg($options['dsn']), escapeshellarg($options['user']), escapeshellarg($options['password']),
     );
     $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
@@ -111,7 +122,9 @@ for ($worker = 1; $worker <= $writers; $worker++) {
 }
 
 $failed = false;
+$retries = 0;
 foreach ($processes as [$process, $pipes]) {
+    $retries += (int) stream_get_contents($pipes[1]);
     $error = stream_get_contents($pipes[2]);
     fclose($pipes[1]);
     fclose($pipes[2]);
@@ -124,34 +137,34 @@ if ($failed) {
     exit(1);
 }
 
-$expected = $writers * $mutations;
-$watermark = $store->watermark($space)->value;
-
-$sequences = [];
-$cursor = 0;
-do {
-    $page = $store->pull($space, $cursor, 100);
-    foreach ($page->commits as $commit) {
-        $sequences[] = $commit->sequence->value;
-    }
-    $cursor = $page->nextCursor->value;
-} while ($page->hasMore);
-
 $problems = [];
-if ($watermark !== $expected) {
-    $problems[] = "watermark is $watermark, expected $expected";
-}
-if (count($sequences) !== $expected) {
-    $problems[] = 'read '.count($sequences)." commits, expected $expected";
-}
-if ($sequences !== range(1, count($sequences))) {
-    $problems[] = 'commit sequences are not a gapless ascending run';
+$spaces = $separate ? array_map(fn (int $w): string => $spaceOf('w'.$w), range(1, $writers)) : [$spaceOf('w1')];
+$perSpace = $separate ? $mutations : $writers * $mutations;
+foreach ($spaces as $space) {
+    $watermark = $store->watermark($space)->value;
+    $sequences = [];
+    $cursor = 0;
+    do {
+        $page = $store->pull($space, $cursor, 100);
+        foreach ($page->commits as $commit) {
+            $sequences[] = $commit->sequence->value;
+        }
+        $cursor = $page->nextCursor->value;
+    } while ($page->hasMore);
+
+    if ($watermark !== $perSpace) {
+        $problems[] = "$space: watermark is $watermark, expected $perSpace";
+    }
+    if ($sequences !== range(1, $perSpace)) {
+        $problems[] = "$space: commit sequences are not a gapless ascending run of $perSpace";
+    }
 }
 for ($worker = 1; $worker <= $writers; $worker++) {
-    if ($store->acknowledged($space, new Replica('w'.$worker)) !== $mutations) {
+    if ($store->acknowledged($spaceOf('w'.$worker), new Replica('w'.$worker)) !== $mutations) {
         $problems[] = "replica w$worker did not acknowledge $mutations mutations";
     }
 }
+$expected = $writers * $mutations;
 
 if ($problems !== []) {
     foreach ($problems as $problem) {
@@ -161,7 +174,7 @@ if ($problems !== []) {
 }
 
 printf(
-    "%s: %d writers x %d mutations = %d gapless commits, every replica fully acknowledged. OK\n",
+    "%s: %d writers x %d mutations in %s space(s) = %d gapless commits, every replica fully acknowledged, %d contention retries. OK\n",
     $options['dsn'] === '' ? 'sqlite' : explode(':', $options['dsn'])[0],
-    $writers, $mutations, $expected,
+    $writers, $mutations, $separate ? 'separate' : 'one', $expected, $retries,
 );

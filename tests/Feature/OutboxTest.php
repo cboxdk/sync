@@ -642,3 +642,32 @@ it('keeps a sent write\'s number and sends it before anything else on its stream
 
     expect($again->id)->toBe($parent->id)->and($again->sequence->value)->toBe(1);
 })->with(outboxStores());
+
+/**
+ * What was looked up before the transaction may be stale: another process can
+ * have rewritten a reference in it since. Handing out that copy undid the
+ * rewrite, and every retry sent the handle.
+ */
+it('hands out the write as it is now, not as it was when it was looked up', function () {
+    $pdo = new PDO('sqlite::memory:');
+    $stale = new class($pdo) extends PdoOutboxStore
+    {
+        public ?Mutation $frozen = null;
+
+        public function head(?string $entityType = null, ?string $space = null): ?Mutation
+        {
+            return $this->frozen ?? parent::head($entityType, $space);
+        }
+    };
+    $stale->migrate();
+    $outbox = outboxFor($stale);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p-handle'), MutationKind::Create, [Op::set('name', 'x')], 0);
+    $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p-handle')], 0);
+    $stale->frozen = $stale->head('tasks');
+
+    // Meanwhile the parent is named and the child rewritten.
+    $outbox->acknowledged($outbox->take($outbox->queuedCreate('projects', 'p-handle')?->id ?? '') ?? throw new LogicException('expected the project'), new EntityKey('team-1', 'projects', 'p-real'), ['tasks' => ['project_id' => 'projects']]);
+
+    $sent = $outbox->head('tasks');
+    expect($sent?->operations[0]->value->value())->toBe('p-real');
+});

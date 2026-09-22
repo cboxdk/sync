@@ -131,6 +131,22 @@ the column existed has no type, and that is read as "unknown" rather than "does
 not match" — the alternative silently drops history a device is owed. The view's
 own `includes()` still decides membership, exactly as it does for a bootstrap.
 
+## Isolation
+
+The store opens its transactions at READ COMMITTED on MySQL. Every statement then
+sees the latest committed state, and a lookup that finds nothing does not lock
+the gap where the row would be. MySQL's default, REPEATABLE READ, got both wrong
+for a sync log: a snapshot older than the space lock, so a writer numbered its
+commit from before another had committed; and gap locks on shared indexes, so
+writers in *different* spaces deadlocked - measured at 807 deadlocks for 600
+writes across six spaces. With READ COMMITTED both are zero.
+
+When the engine runs inside a transaction the host began, the host chose the
+isolation. The ledger then uses locking reads so it still sees the latest state,
+and a deadlock is reported as `TransientFailure` - retry the same mutation.
+Running the host's connection at READ COMMITTED avoids it altogether.
+`bin/concurrency.php --spaces=separate` measures it, and counts every retry.
+
 ## Keeping an installed schema current
 
 `migrate()` is idempotent and also reconciles: it adds columns and indexes that

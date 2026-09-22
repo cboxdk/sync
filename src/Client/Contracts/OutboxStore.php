@@ -156,6 +156,14 @@ interface OutboxStore
     public function inFlight(Replica $replica, string $space): ?Mutation;
 
     /**
+     * Hold this stream's numbering for the rest of the transaction, so two
+     * processes cannot both see nothing in flight and number two writes the
+     * same. SQLite's write lock already does it; a server database needs a
+     * row lock.
+     */
+    public function lockStream(Replica $replica, string $space): void;
+
+    /**
      * Move queued writes of one type from one space label to another - the
      * scope they were queued under turned out to have a different name.
      */

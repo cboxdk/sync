@@ -82,6 +82,12 @@ class PdoStore implements Store
             } catch (\Throwable $failure) {
                 $this->rollback();
 
+                // Two writers that each hold what the other needs: nothing was
+                // committed, and the same mutation may simply be sent again.
+                if ($failure instanceof \PDOException && self::isContention($failure)) {
+                    throw new TransientFailure('The space is busy; retry the same mutation', previous: $failure);
+                }
+
                 throw $failure;
             }
         } finally {
@@ -95,7 +101,35 @@ class PdoStore implements Store
      */
     protected function begin(): void
     {
+        if ($this->schema->driver === PdoSchema::MYSQL) {
+            // READ COMMITTED: every statement sees the latest committed state,
+            // and a lookup that finds nothing does not lock the gap where the
+            // row would be. MySQL's default, REPEATABLE READ, did both wrong
+            // here - a snapshot older than the space lock, and gap locks that
+            // made writers in DIFFERENT spaces deadlock on shared indexes.
+            $this->connection()->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        }
         $this->connection()->exec($this->schema->beginStatement());
+    }
+
+    /**
+     * Whether the ledger has to use locking reads to see the latest state -
+     * only when the engine runs inside a transaction someone else began, whose
+     * isolation this store could not choose. Adapters that open a savepoint in
+     * a host's transaction override this.
+     */
+    protected function needsLockingReads(): bool
+    {
+        return false;
+    }
+
+    /** A deadlock or a lock wait that timed out, on any driver. */
+    private static function isContention(\PDOException $failure): bool
+    {
+        $state = (string) $failure->getCode();
+        $driverCode = $failure->errorInfo[1] ?? null;
+
+        return in_array($state, ['40001', '40P01'], true) || in_array($driverCode, [1213, 1205], true);
     }
 
     protected function commit(): void
@@ -110,7 +144,7 @@ class PdoStore implements Store
 
     protected function ledger(string $space): Ledger
     {
-        return new PdoLedger($this->connection(), $this->schema, $space);
+        return new PdoLedger($this->connection(), $this->schema, $space, $this->needsLockingReads());
     }
 
     /** Adapter hook; failure here rolls back even results and acknowledgements. */

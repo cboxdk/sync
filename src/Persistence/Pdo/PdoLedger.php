@@ -33,7 +33,7 @@ class PdoLedger implements Ledger
     /** @var array{array<string, true>, list<string>}|null */
     private ?array $savepoint = null;
 
-    public function __construct(private \PDO $connection, private PdoSchema $schema, private string $space) {}
+    public function __construct(private \PDO $connection, private PdoSchema $schema, private string $space, private bool $lockingReads = false) {}
 
     public function space(): string
     {
@@ -219,20 +219,22 @@ class PdoLedger implements Ledger
     /**
      * Every read inside the ledger sees the latest committed state.
      *
-     * On MySQL a transaction reads from a snapshot fixed at its FIRST read -
-     * and when the engine's transaction is a savepoint inside the host's, that
-     * read can come before the space lock was taken: a model save reading its
-     * own row, say. The ledger then numbered its commit from before another
-     * writer committed, and concurrent writers to one tenant mostly failed on
-     * the commits primary key. A locking read always sees the latest version.
-     * PostgreSQL's default isolation reads the latest committed row per
-     * statement already; SQLite has one writer.
+     * The store opens its own transactions at READ COMMITTED on MySQL, which
+     * gives that on its own. Inside a host's transaction it cannot choose the
+     * isolation, and under REPEATABLE READ the snapshot is fixed at the host's
+     * first read - before the space lock - so the ledger numbered its commit
+     * from before another writer committed. Locking reads see the latest
+     * version there. PostgreSQL reads the latest committed row per statement
+     * already; SQLite has one writer.
      *
      * @param  list<string|int|null>  $bindings
      */
     private function scalar(string $sql, array $bindings): ?string
     {
-        if ($this->schema->driver === PdoSchema::MYSQL && str_starts_with($sql, 'SELECT')) {
+        // Receipts are global, keyed by mutation id alone: a locking read that
+        // finds nothing there locks a gap other spaces insert into. A duplicate
+        // id is caught by the primary key instead.
+        if ($this->lockingReads && $this->schema->driver === PdoSchema::MYSQL && str_starts_with($sql, 'SELECT') && ! str_contains($sql, 'FROM sync_receipts')) {
             $sql .= ' FOR SHARE';
         }
         $statement = $this->connection->prepare($sql);

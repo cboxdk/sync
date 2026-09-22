@@ -11,6 +11,7 @@ use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Exceptions\TransientFailure;
 use Cbox\Sync\Persistence\InMemoryStore;
+use Cbox\Sync\Persistence\Pdo\PdoStore;
 use Cbox\Sync\Testing\FailingStoreFactory;
 use Cbox\Sync\Testing\FakeIdGenerator;
 use Cbox\Sync\ValueObjects\RecordVersion;
@@ -91,3 +92,20 @@ it('freezes caller array references before journaling mutation identity', functi
     expect($this->engine->process($mutation))->toEqual($first);
     expect(fn () => $this->engine->process($this->mutation('a', 1, [$operation], 0, kind: MutationKind::Create)))->toThrow(ProtocolException::class);
 });
+
+/** A deadlock or a lock wait that timed out committed nothing; the same mutation may be sent again. */
+it('answers a deadlock as a transient failure', function (string $state, int $driverCode) {
+    $store = new PdoStore(new PDO('sqlite::memory:'));
+    $store->migrate();
+    $deadlock = new PDOException('deadlock');
+    $deadlock->errorInfo = [$state, $driverCode, 'deadlock'];
+    (new ReflectionProperty(Exception::class, 'code'))->setValue($deadlock, $state);
+
+    expect(fn () => $store->transaction('s', function () use ($deadlock): never {
+        throw $deadlock;
+    }))->toThrow(TransientFailure::class);
+})->with([
+    'mysql deadlock' => ['40001', 1213],
+    'mysql lock wait' => ['HY000', 1205],
+    'postgres deadlock' => ['40P01', 7],
+]);

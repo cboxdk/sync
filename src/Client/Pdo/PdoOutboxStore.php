@@ -217,6 +217,15 @@ class PdoOutboxStore implements OutboxStore
         return $this->scalar('SELECT attempted FROM sync_outbox WHERE mutation_id = ?', [$mutationId]) === '1';
     }
 
+    public function lockStream(Replica $replica, string $space): void
+    {
+        if ($this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+            return;
+        }
+        $this->setAcknowledged($replica, $space, 0);
+        $this->scalar('SELECT assigned FROM sync_outbox_sequences WHERE replica_id = ? AND space = ? FOR UPDATE', [$replica->id, $space]);
+    }
+
     public function inFlight(Replica $replica, string $space): ?Mutation
     {
         $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE replica_id = ? AND space = ? AND attempted = 1 AND abandoned_reason IS NULL ORDER BY queued_at, mutation_id LIMIT 1', [$replica->id, $space]);

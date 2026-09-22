@@ -146,6 +146,8 @@ class InMemoryOutboxStore implements OutboxStore
         return isset($this->attempted[$mutationId]);
     }
 
+    public function lockStream(Replica $replica, string $space): void {}
+
     public function inFlight(Replica $replica, string $space): ?Mutation
     {
         foreach ($this->queue as $mutation) {

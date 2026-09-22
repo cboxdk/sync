@@ -151,3 +151,10 @@ jobs:
             --dsn="${{ steps.connection.outputs.dsn }}" \
             --user="${{ steps.connection.outputs.user }}" \
             --password=secret
+
+      - name: Prove writers in different spaces do not block each other
+        run: |
+          php bin/concurrency.php --writers=6 --mutations=50 --spaces=separate \
+            --dsn="${{ steps.connection.outputs.dsn }}" \
+            --user="${{ steps.connection.outputs.user }}" \
+            --password=secret
