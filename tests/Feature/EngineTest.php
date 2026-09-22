@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\Sync\Data\FieldOperation;
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Data\Resolution;
 use Cbox\Sync\Enums\MutationKind;
@@ -182,4 +183,16 @@ it('paginates whole commits with immutable snapshots', function () {
     expect($next->commits)->toHaveCount(2);
     expect($next->nextCursor->value)->toBe(3);
     expect(array_map(fn ($change) => $change->ordinal, $next->commits[1]->changes))->toBe([0, 1]);
+});
+
+/** A host doing its own work for a write that landed has to know whether this call wrote it, or a replay was answered. */
+it('says whether this call is the one that wrote the mutation', function () {
+    $mutation = $this->mutation('a', 1, [FieldOperation::set('title', 'x')], 0, kind: MutationKind::Create);
+
+    $first = $this->engine->submit($mutation);
+    $replay = $this->engine->submit($mutation);
+
+    expect($first->wrote())->toBeTrue()
+        ->and($replay->wrote())->toBeFalse()
+        ->and($replay->result)->toEqual($first->result);
 });

@@ -35,6 +35,8 @@ The projector evaluates both `Change::previousRecord` and `Change::record`. Look
 | inside | globally deleted | `deleted` |
 | outside | outside | no projected change |
 
+A view whose rule can only judge a record as it stands now - a permission check against the host's own row - implements `CurrentStateView`. It cannot say whether a reader could see an older version, so for it a change the rule does not include now is sent as `removed_from_scope` (or `deleted`), the id and nothing else, whenever the underlying window (`spans()`) held either side. A removal of an entity the reader never had changes nothing on its side; the content of one it may not see is never sent.
+
 `removed_from_scope` never creates or replays a domain tombstone. `deleted` represents a canonical tombstone. An entity entering a view receives a full record even when its original create commit predates the cursor.
 
 The reference projector exposes canonical record data and structured provenance. It intentionally does not copy mutation receipts or conflict groups into a filtered feed: either can contain proposed fields that are outside the view's authorized projection. A host that exposes conflict metadata must define and enforce a field-level projection policy. Membership filtering alone is not a data-redaction boundary.

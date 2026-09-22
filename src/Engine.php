@@ -24,6 +24,7 @@ use Cbox\Sync\Data\MutationResult;
 use Cbox\Sync\Data\PreconditionFailure;
 use Cbox\Sync\Data\Provenance;
 use Cbox\Sync\Data\Receipt;
+use Cbox\Sync\Data\Submission;
 use Cbox\Sync\Data\ValidationContext;
 use Cbox\Sync\Enums\ChangeKind;
 use Cbox\Sync\Enums\ConflictDecision;
@@ -56,6 +57,12 @@ class Engine
      */
     public function process(Mutation $mutation, AdapterContext $context = new AdapterContext, OnConflict $onConflict = OnConflict::Resolve): MutationResult
     {
+        return $this->submit($mutation, $context, $onConflict)->result;
+    }
+
+    /** As process(), also saying whether this call is the one that wrote it. */
+    public function submit(Mutation $mutation, AdapterContext $context = new AdapterContext, OnConflict $onConflict = OnConflict::Resolve): Submission
+    {
         Identifier::checkMutation($mutation);
         $committed = null;
         $result = $this->store->transaction($mutation->entity->space, function (Ledger $ledger) use ($mutation, $context, $onConflict, &$committed): MutationResult {
@@ -63,7 +70,7 @@ class Engine
         });
         $this->announce($mutation->entity->space, $committed);
 
-        return $result;
+        return new Submission($result, $committed);
     }
 
     /**

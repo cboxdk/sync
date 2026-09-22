@@ -144,20 +144,29 @@ class ViewSyncService
         $afterIncluded = $after !== null && ! $after->deleted && $view->includes($after);
         $deleted = $change->kind === ChangeKind::Deleted || ($after !== null && $after->deleted);
         $entity = $after !== null ? $after->entity : $before?->entity;
-        if ($entity === null) {
+        $version = ($after ?? $before)?->version;
+        if ($entity === null || $version === null) {
             throw new \LogicException('Canonical change has neither a previous nor a new record');
+        }
+
+        if ($view instanceof CurrentStateView) {
+            // Judged now, not then: whatever the rule does not show now leaves
+            // as an id, if the window ever held it.
+            $spanned = ($before !== null && ! $before->deleted && $view->spans($before))
+                || ($after !== null && ! $after->deleted && $view->spans($after));
+            $beforeIncluded = $spanned;
         }
 
         if ($deleted) {
             return $beforeIncluded
-                ? new ViewChange($ordinal, ViewChangeKind::Deleted, $entity, ($after ?? $before)->version, provenance: $change->provenance)
+                ? new ViewChange($ordinal, ViewChangeKind::Deleted, $entity, $version, provenance: $change->provenance)
                 : null;
         }
         if ($afterIncluded) {
             return new ViewChange($ordinal, ViewChangeKind::Upsert, $entity, $after->version, $after, $change->provenance);
         }
         if ($beforeIncluded) {
-            return new ViewChange($ordinal, ViewChangeKind::RemovedFromScope, $entity, ($after ?? $before)->version, provenance: $change->provenance);
+            return new ViewChange($ordinal, ViewChangeKind::RemovedFromScope, $entity, $version, provenance: $change->provenance);
         }
 
         return null;

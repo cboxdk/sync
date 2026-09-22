@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\Sync\Data\EntityRecord;
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Persistence\InMemoryStore;
@@ -9,6 +10,7 @@ use Cbox\Sync\Testing\ClientStateFactory;
 use Cbox\Sync\Tests\Fixtures\ViewScenario;
 use Cbox\Sync\ValueObjects\CommitSequence;
 use Cbox\Sync\Views\BootstrapToken;
+use Cbox\Sync\Views\CurrentStateView;
 use Cbox\Sync\Views\CursorContext;
 use Cbox\Sync\Views\FieldEqualsView;
 use Cbox\Sync\Views\FrozenBootstrapSessions;
@@ -336,4 +338,66 @@ it('drops the oldest frozen bootstrap rather than growing for ever', function ()
 it('refuses to retain nothing', function () {
     expect(fn () => new FrozenBootstrapSessions(new InMemoryStore, retainedSessions: 0))
         ->toThrow(InvalidRequest::class);
+});
+
+/**
+ * A rule that judges the record as it is now - a host's permission check on
+ * its own row - cannot say what an older version looked like to a reader. A
+ * row created and deleted since the cursor was sent with its content, and a
+ * row whose owner changed hid its old versions from the old owner too, who
+ * never heard it left. Whatever the rule does not show now leaves as an id.
+ */
+it('sends only ids for what a current-state rule does not show now', function () {
+    $scenario = new ViewScenario;
+    $mine = $scenario->create('mine', 'alpha');
+    $window = FieldEqualsView::matching('alpha', 'v1', 'project', 'alpha');
+    $hidden = ['mine' => false, 'private' => false];
+    $view = new class($window, $hidden) implements CurrentStateView
+    {
+        /** @param array<string, bool> $visible */
+        public function __construct(private FieldEqualsView $window, private array &$visible) {}
+
+        public function id(): string
+        {
+            return $this->window->id();
+        }
+
+        public function filterVersion(): string
+        {
+            return $this->window->filterVersion();
+        }
+
+        public function filterSignature(): string
+        {
+            return $this->window->filterSignature();
+        }
+
+        public function spans(EntityRecord $record): bool
+        {
+            return $this->window->includes($record);
+        }
+
+        public function includes(EntityRecord $record): bool
+        {
+            return $this->window->includes($record) && ($this->visible[$record->entity->id] ?? true);
+        }
+    };
+    $hidden['mine'] = true;
+    $sync = new ViewSyncService($scenario->store, '1', 'one');
+    $first = $sync->bootstrap($sync->context('test', $view), $view, $sync->openBootstrap($sync->context('test', $view), $view));
+    $cursor = $first->cursor ?? throw new LogicException('Single page bootstrap expected');
+
+    // Ownership moves away in a change the rule sees only as it is now.
+    $scenario->update($mine, [Op::set('title', 'moved')]);
+    $hidden['mine'] = false;
+    // A private row is created and deleted before the delta is asked for.
+    $private = $scenario->create('private', 'alpha');
+    $scenario->delete($private);
+    $changes = array_merge(...array_map(fn ($commit) => $commit->changes, $sync->delta($cursor, $view)->commits));
+
+    expect(array_map(fn ($change) => [$change->entity->id, $change->kind], $changes))->toBe([
+        ['mine', ViewChangeKind::RemovedFromScope],
+        ['private', ViewChangeKind::RemovedFromScope],
+        ['private', ViewChangeKind::Deleted],
+    ])->and(array_filter(array_map(fn ($change) => $change->record, $changes)))->toBe([]);
 });
