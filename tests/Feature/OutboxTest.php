@@ -542,3 +542,15 @@ it('rewrites a reference to a record created in another scope', function (Outbox
 
     expect($outbox->head('tasks')?->operations[0]->value->value())->toBe('p-real');
 })->with(outboxStores());
+
+it('finds where writes for a record are still queued', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('p1', 'nodes', 'parent'), MutationKind::Create, [Op::set('t', 'a')], 0);
+
+    expect($outbox->queuedKey('nodes', 'parent')?->space)->toBe('p1')
+        ->and($outbox->queuedKey('nodes', 'other'))->toBeNull()
+        ->and($outbox->queuedKey('tasks', 'parent'))->toBeNull();
+
+    $outbox->acknowledged($outbox->head() ?? throw new LogicException('expected a head'));
+    expect($outbox->queuedKey('nodes', 'parent'))->toBeNull();
+})->with(outboxStores());
