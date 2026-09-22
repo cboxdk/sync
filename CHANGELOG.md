@@ -15,6 +15,9 @@
 - **Run `migrate()` - or `PdoSchema::forConnection($pdo)->install($pdo)` from your own migration - once after upgrading.** It adds the new receipt and stream columns and indexes, gives receipts from earlier releases their stream position, and on MySQL retypes identity columns to `utf8mb4_0900_bin`, which copies each table: run it in a maintenance window on a large installation. Until it has run, writes fail.
 - A device's `PdoOutboxStore::migrate()` adds its new columns in place on first use; writes queued before the upgrade count as sent once. Back the file up first; downgrading is not supported.
 - `Outbox::abandon()` runs in its own outbox transaction now; do not call it inside one of yours on the same connection.
+- Run `migrate()`: it adds `sync_receipts.commit_sequence` and retypes MySQL identity columns. **On a large MySQL installation, run it in a maintenance window**: the collation change copies each table with writes blocked, once per table.
+- A device keeps sending writes queued before the upgrade on the stream they were queued on, so their retries and `depends_on` still match. `OutboxStore` implementations outside this package need the new methods, and the PDO outbox gains an `entity_id` column in place.
+- Format-2 payloads cannot be read by 0.8.x; a downgrade after writing is refused by name.
 
 ### Fixed
 
@@ -59,12 +62,6 @@
 
 - **The log stores about a tenth of what it did.** Payloads are deflated (format 2): a one-field edit on a ten-field record went from ~22KB of commit to ~2.6KB, for ~20µs more per write. Inflating is bounded at 16MB. Formats 0 and 1 are still read. Requires `ext-zlib`.
 - Delta narrowing reads two index ranges instead of an `OR` the SQLite planner could not index.
-
-### Upgrading
-
-- Run `migrate()`: it adds `sync_receipts.commit_sequence` and retypes MySQL identity columns. **On a large MySQL installation, run it in a maintenance window**: the collation change copies each table with writes blocked, once per table.
-- A device keeps sending writes queued before the upgrade on the stream they were queued on, so their retries and `depends_on` still match. `OutboxStore` implementations outside this package need the new methods, and the PDO outbox gains an `entity_id` column in place.
-- Format-2 payloads cannot be read by 0.8.x; a downgrade after writing is refused by name.
 
 ## 0.8.0 - 2026-09-21
 
