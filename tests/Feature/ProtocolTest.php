@@ -5,14 +5,17 @@ declare(strict_types=1);
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Data\Resolution;
+use Cbox\Sync\Engine;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Enums\MutationStatus;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\Exceptions\ProtocolException;
+use Cbox\Sync\Persistence\InMemoryStore;
 use Cbox\Sync\Resolvers\ServerWins;
 use Cbox\Sync\Support\UuidV7Generator;
 use Cbox\Sync\ValueObjects\EntityKey;
 use Cbox\Sync\ValueObjects\FieldValue;
+use Cbox\Sync\ValueObjects\Identifier;
 use Cbox\Sync\ValueObjects\MutationSequence;
 use Cbox\Sync\ValueObjects\RecordVersion;
 use Cbox\Sync\ValueObjects\Replica;
@@ -177,15 +180,21 @@ it('classifies malformed candidate IDs as invalid requests before deduplication'
  */
 it('refuses an identifier longer than the columns that store it, at the write', function () {
     $long = str_repeat('x', 151);
-    $write = fn (EntityKey $key, string $replica = 'r', string $id = 'm') => new Mutation($id, $key, new Replica($replica), new MutationSequence(1), MutationKind::Create, new RecordVersion(0));
+    $mutation = fn (EntityKey $key, string $replica = 'r', string $id = 'm') => new Mutation($id, $key, new Replica($replica), new MutationSequence(1), MutationKind::Create, new RecordVersion(0));
+    $write = fn (EntityKey $key, string $replica = 'r', string $id = 'm') => Identifier::checkMutation($mutation($key, $replica, $id));
 
     expect(fn () => $write(new EntityKey('s', 't', $long)))->toThrow(InvalidRequest::class, 'longer than 150')
         ->and(fn () => $write(new EntityKey($long, 't', 'i')))->toThrow(InvalidRequest::class)
         ->and(fn () => $write(new EntityKey('s', 't', 'i'), $long))->toThrow(InvalidRequest::class)
         ->and(fn () => $write(new EntityKey('s', 't', 'i'), 'r', $long))->toThrow(InvalidRequest::class)
         ->and(fn () => $write(new EntityKey('s', 't', "a\0b")))->toThrow(InvalidRequest::class, 'NUL')
+        // Stored by SQLite, refused by MySQL and PostgreSQL with a driver error.
+        ->and(fn () => $write(new EntityKey('s', 't', "bad\xff")))->toThrow(InvalidRequest::class, 'UTF-8')
+        // The engine checks at its own door, for a caller that built one directly.
+        ->and(fn () => (new Engine(new InMemoryStore))->process($mutation(new EntityKey('s', 't', $long))))->toThrow(InvalidRequest::class)
         // Characters, not bytes: the columns are counted the same way.
-        ->and($write(new EntityKey('s', 't', str_repeat('æ', 150)))->entity->id)->toBe(str_repeat('æ', 150))
-        // A key read back from storage is not refused.
-        ->and((new EntityKey('s', 't', $long))->id)->toBe($long);
+        ->and(fn () => $write(new EntityKey('s', 't', str_repeat('æ', 150))))->not->toThrow(InvalidRequest::class)
+        // A key or a mutation read back from storage is not refused.
+        ->and((new EntityKey('s', 't', $long))->id)->toBe($long)
+        ->and($mutation(new EntityKey('s', 't', $long), $long)->id)->toBe('m');
 });

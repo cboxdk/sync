@@ -38,6 +38,7 @@ use Cbox\Sync\Support\UuidV7Generator;
 use Cbox\Sync\Validation\AcceptAll;
 use Cbox\Sync\ValueObjects\CommitSequence;
 use Cbox\Sync\ValueObjects\FieldVersion;
+use Cbox\Sync\ValueObjects\Identifier;
 use Cbox\Sync\ValueObjects\RecordVersion;
 
 class Engine
@@ -52,6 +53,7 @@ class Engine
      */
     public function process(Mutation $mutation, AdapterContext $context = new AdapterContext, OnConflict $onConflict = OnConflict::Resolve): MutationResult
     {
+        Identifier::checkMutation($mutation);
         $committed = null;
         $result = $this->store->transaction($mutation->entity->space, function (Ledger $ledger) use ($mutation, $context, $onConflict, &$committed): MutationResult {
             $receipt = $ledger->receipt($mutation->id);
@@ -64,9 +66,11 @@ class Engine
             }
             $ack = $ledger->acknowledged($mutation->replica);
             if ($mutation->sequence->value <= $ack && $mutation->sequence->value <= $ledger->prunedThrough($mutation->replica)) {
-                // Could be a replay whose answer was pruned. Renumbering it
-                // would apply it twice, so it is refused as final instead.
-                throw new ProtocolException('This mutation may already have been applied, and its receipt has been pruned');
+                // A position whose receipt was pruned: this could be a replay
+                // of a write that was applied, and renumbering it would apply
+                // it twice. So this mutation is final - but the answer says
+                // where the stream is, so the writer can go on with the next.
+                return new MutationResult(MutationStatus::ReceiptPruned, reason: 'receipt_pruned', acknowledgedSequence: $ack);
             }
             if ($mutation->sequence->value <= $ack) {
                 // A number this stream already used, under an identity with no

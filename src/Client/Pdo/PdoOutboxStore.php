@@ -59,8 +59,17 @@ class PdoOutboxStore implements OutboxStore
         // made draining a long run of offline creates quadratic. Added to an
         // existing device database in place; rows from before it are NULL and
         // are still matched by decoding.
-        if (! in_array('entity_id', $this->columns('sync_outbox'), true)) {
+        $columns = $this->columns('sync_outbox');
+        if (! in_array('entity_id', $columns, true)) {
             $this->pdo->exec("ALTER TABLE sync_outbox ADD COLUMN entity_id $name NULL");
+        }
+        if (! in_array('attempted', $columns, true)) {
+            $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN attempted SMALLINT NOT NULL DEFAULT 0');
+        }
+        // Rows queued before the id column existed get it now, once, so
+        // everything that finds a record's writes by id sees them too.
+        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE entity_id IS NULL', []) as [$id, $payload]) {
+            $this->run('UPDATE sync_outbox SET entity_id = ? WHERE mutation_id = ?', [Payload::decode($payload, Mutation::class)->entity->id, $id]);
         }
         $this->index('sync_outbox_entity', 'sync_outbox', 'space, entity_type, entity_id');
         $this->index('sync_outbox_record', 'sync_outbox', 'entity_type, entity_id');
@@ -166,10 +175,46 @@ class PdoOutboxStore implements OutboxStore
         $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ? AND assigned < ?', [$sequence, $replica->id, $space, $sequence]);
     }
 
-    public function resetAcknowledged(Replica $replica, string $space, int $sequence): void
+    public function resetAcknowledged(Replica $replica, string $space, int $sequence, int $expected): void
     {
         $this->setAcknowledged($replica, $space, 0);
-        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ?', [$sequence, $replica->id, $space]);
+        // One statement, so the comparison and the write cannot be separated
+        // by another delivery.
+        $this->run('UPDATE sync_outbox_sequences SET assigned = ? WHERE replica_id = ? AND space = ? AND assigned = ?', [$sequence, $replica->id, $space, $expected]);
+    }
+
+    public function namedAs(string $entityType, string $handle): ?string
+    {
+        return $this->scalar('SELECT name FROM sync_outbox_names WHERE entity_type = ? AND handle = ? LIMIT 1', [$entityType, $handle]);
+    }
+
+    public function firstFor(string $entityType, string $entityId): ?Mutation
+    {
+        $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NULL ORDER BY queued_at, mutation_id LIMIT 1', [$entityType, $entityId]);
+
+        return $payload === null ? null : Payload::decode($payload, Mutation::class);
+    }
+
+    public function find(string $mutationId): ?Mutation
+    {
+        $payload = $this->scalar('SELECT payload FROM sync_outbox WHERE mutation_id = ? AND abandoned_reason IS NULL', [$mutationId]);
+
+        return $payload === null ? null : Payload::decode($payload, Mutation::class);
+    }
+
+    public function markAttempted(string $mutationId): void
+    {
+        $this->run('UPDATE sync_outbox SET attempted = 1 WHERE mutation_id = ?', [$mutationId]);
+    }
+
+    public function relabel(string $entityType, string $from, string $to): void
+    {
+        foreach ($this->rows('SELECT mutation_id, payload FROM sync_outbox WHERE entity_type = ? AND space = ? AND abandoned_reason IS NULL', [$entityType, $from]) as [$id, $payload]) {
+            $mutation = Payload::decode($payload, Mutation::class);
+            $this->run('UPDATE sync_outbox SET space = ?, payload = ? WHERE mutation_id = ?', [
+                $to, Payload::encode($mutation->withEntity(new EntityKey($to, $entityType, $mutation->entity->id))), $id,
+            ]);
+        }
     }
 
     public function nameOf(EntityKey $handle): ?EntityKey
@@ -254,20 +299,13 @@ class PdoOutboxStore implements OutboxStore
         return $names;
     }
 
-    public function queuedKey(string $entityType, string $entityId): ?EntityKey
-    {
-        $space = $this->scalar('SELECT space FROM sync_outbox WHERE entity_type = ? AND entity_id = ? AND abandoned_reason IS NULL ORDER BY queued_at LIMIT 1', [$entityType, $entityId]);
-
-        return $space === null ? null : new EntityKey($space, $entityType, $entityId);
-    }
-
     public function queued(array $entityTypes): array
     {
         if ($entityTypes === []) {
             return [];
         }
         $mutations = [];
-        $sql = 'SELECT mutation_id, payload FROM sync_outbox WHERE abandoned_reason IS NULL AND entity_type IN ('
+        $sql = 'SELECT mutation_id, payload FROM sync_outbox WHERE abandoned_reason IS NULL AND attempted = 0 AND entity_type IN ('
             .implode(', ', array_fill(0, count($entityTypes), '?')).') ORDER BY queued_at, mutation_id';
         foreach ($this->rows($sql, $entityTypes) as $row) {
             $mutations[] = Payload::decode($row[1], Mutation::class);

@@ -7,7 +7,6 @@ namespace Cbox\Sync\Data;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Exceptions\InvalidRequest;
 use Cbox\Sync\ValueObjects\EntityKey;
-use Cbox\Sync\ValueObjects\Identifier;
 use Cbox\Sync\ValueObjects\MutationSequence;
 use Cbox\Sync\ValueObjects\RecordVersion;
 use Cbox\Sync\ValueObjects\Replica;
@@ -42,14 +41,9 @@ readonly class Mutation
         if ($id === '' || $dependsOn === '' || $dependsOn === $id) {
             throw new InvalidRequest('Invalid mutation identity/dependency');
         }
-        Identifier::check($id, 'Mutation id');
-        Identifier::check($entity->space, 'Space');
-        Identifier::check($entity->type, 'Entity type');
-        Identifier::check($entity->id, 'Entity id');
-        Identifier::check($replica->id, 'Replica identity');
-        if ($dependsOn !== null) {
-            Identifier::check($dependsOn, 'Mutation dependency');
-        }
+        // Bounds are checked where a write is made - Engine::process() and
+        // Outbox::queue() - not here: a mutation is also rebuilt from a device
+        // queue an earlier release filled, and that must stay readable.
         self::validateOperations($operations);
         if (($kind === MutationKind::Resolve) !== ($resolution !== null) || ($kind === MutationKind::Resolve && count($operations) !== 1)) {
             throw new InvalidRequest('Resolve requires exactly one field operation and resolution');

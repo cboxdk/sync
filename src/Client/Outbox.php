@@ -77,6 +77,7 @@ class Outbox
             $dependsOn,
             $resolution,
         );
+        Identifier::checkMutation($mutation);
         $this->store->append($mutation);
 
         return $mutation;
@@ -94,9 +95,37 @@ class Outbox
     public function head(?string $entityType = null, ?string $space = null): ?Mutation
     {
         $mutation = $this->store->head($entityType, $space);
-        if ($mutation === null) {
-            return null;
-        }
+
+        return $mutation === null ? null : $this->handOut($mutation);
+    }
+
+    /**
+     * The write head() would hand out, without handing it out - so a caller can
+     * look at what it needs first, a parent's create, say, while the write
+     * itself can still be rewritten when that parent is named.
+     */
+    public function peek(?string $entityType = null, ?string $space = null): ?Mutation
+    {
+        return $this->store->head($entityType, $space);
+    }
+
+    /**
+     * One queued write by its identity, numbered for sending - out of queue
+     * order. Used for a parent's create, which has to reach the server before
+     * the child that points at it. Safe: a create is the first write for its
+     * record, so nothing for the same record can be queued ahead of it.
+     */
+    public function take(string $mutationId): ?Mutation
+    {
+        $mutation = $this->store->find($mutationId);
+
+        return $mutation === null ? null : $this->handOut($mutation);
+    }
+
+    private function handOut(Mutation $mutation): Mutation
+    {
+        // From here on it may be on the server, so it is never rewritten.
+        $this->store->markAttempted($mutation->id);
 
         // The stream it was queued on. A write queued before streams existed
         // carries the bare device id and goes out on that stream, numbered as
@@ -116,6 +145,33 @@ class Outbox
             $mutation->resolution,
             $mutation->expectedVersion,
         );
+    }
+
+    /** A create for this record still waiting to be sent, or null. */
+    public function queuedCreate(string $entityType, string $entityId): ?Mutation
+    {
+        $first = $this->store->firstFor($entityType, $entityId);
+
+        return $first !== null && $first->kind === MutationKind::Create ? $first : null;
+    }
+
+    /** Whether this record's create was abandoned - it will not exist unless the application requeues it. */
+    public function createAbandoned(string $entityType, string $entityId): bool
+    {
+        foreach ($this->store->abandoned() as $entry) {
+            $mutation = $entry['mutation'];
+            if ($mutation->kind === MutationKind::Create && $mutation->entity->type === $entityType && $mutation->entity->id === $entityId) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Move queued writes of a type from one scope label to another. */
+    public function relabel(string $entityType, string $from, string $to): void
+    {
+        $this->store->transaction(fn () => $this->store->relabel($entityType, $from, $to));
     }
 
     /**
@@ -188,15 +244,22 @@ class Outbox
     /**
      * @param  array<string, array<string, string>>  $references  entity type => [field => the type
      *                                                            it points at], rewritten too
+     * @param  array<string, string>  $scopedBy  entity type => the type whose id is its scope:
+     *                                           writes queued under the handle move to the name
      */
-    public function acknowledged(Mutation $mutation, ?EntityKey $named = null, array $references = []): void
+    public function acknowledged(Mutation $mutation, ?EntityKey $named = null, array $references = [], array $scopedBy = []): void
     {
-        $this->store->transaction(function () use ($mutation, $named, $references): void {
+        $this->store->transaction(function () use ($mutation, $named, $references, $scopedBy): void {
             $this->store->setAcknowledged($mutation->replica, $mutation->entity->space, $mutation->sequence->value);
             $this->store->acknowledge($mutation->id);
             if ($named !== null && ! $named->equals($mutation->entity)) {
                 $this->store->rekey($mutation->entity, $named);
                 $this->rewriteReferences($mutation->entity, $named->id, $references);
+                foreach ($scopedBy as $type => $parentType) {
+                    if ($parentType === $named->type) {
+                        $this->store->relabel($type, $mutation->entity->id, $named->id);
+                    }
+                }
             }
         });
     }
@@ -256,7 +319,7 @@ class Outbox
     /** Where writes for this record are still queued, or null. */
     public function queuedKey(string $entityType, string $entityId): ?EntityKey
     {
-        return $this->store->queuedKey($entityType, $entityId);
+        return $this->store->firstFor($entityType, $entityId)?->entity;
     }
 
     /** What a record this device created under a handle is actually called; null until the server has said. */
@@ -280,18 +343,12 @@ class Outbox
      */
     public function resumeAfter(Mutation $mutation, int $acknowledgedSequence): void
     {
-        // Exactly, and downward too. A gap is only ever reported when this
-        // device is AHEAD of the server - a server restored from a backup, a
-        // device database restored from a newer one - so a counter that could
-        // only rise would resend the same number and get the same gap forever.
-        // Compare-and-set: only if the counter is still where this attempt
-        // numbered from. Two deliveries can get the same gap; the one that
-        // resends and succeeds must not have the other wind it back after.
-        $this->store->transaction(function () use ($mutation, $acknowledgedSequence): void {
-            if ($this->store->acknowledged($mutation->replica, $mutation->entity->space) === $mutation->sequence->value - 1) {
-                $this->store->resetAcknowledged($mutation->replica, $mutation->entity->space, $acknowledgedSequence);
-            }
-        });
+        // Exactly, down or up: the server that answered is the authority on
+        // where its stream is, after either side restored a backup. And only
+        // if the counter is still where this attempt numbered from - two
+        // deliveries can get the same answer, and the late one must not wind
+        // back what the other has since sent.
+        $this->store->resetAcknowledged($mutation->replica, $mutation->entity->space, $acknowledgedSequence, $mutation->sequence->value - 1);
     }
 
     /**
@@ -338,9 +395,13 @@ class Outbox
      *
      * Null when no abandoned write has that id.
      */
-    public function requeue(string $mutationId): ?Mutation
+    /**
+     * @param  array<string, array<string, string>>  $references  as for acknowledged()
+     * @param  array<string, string>  $scopedBy  as for acknowledged()
+     */
+    public function requeue(string $mutationId, array $references = [], array $scopedBy = []): ?Mutation
     {
-        return $this->store->transaction(function () use ($mutationId): ?Mutation {
+        return $this->store->transaction(function () use ($mutationId, $references, $scopedBy): ?Mutation {
             foreach ($this->store->abandoned() as $entry) {
                 $old = $entry['mutation'];
                 if ($old->id !== $mutationId) {
@@ -348,7 +409,22 @@ class Outbox
                 }
                 $this->store->dismiss($old->id);
 
-                return $this->append($old->entity, $old->kind, $old->operations, $old->baseVersion->value, $old->atomic, $old->resolution, null);
+                // Written while handles were still handles. Anything named since
+                // - the record, the scope it lives in, the records it points at -
+                // goes back under the name the server gave it.
+                $type = $old->entity->type;
+                $parentType = $scopedBy[$type] ?? null;
+                $space = $parentType === null ? $old->entity->space : ($this->store->namedAs($parentType, $old->entity->space) ?? $old->entity->space);
+                $id = $this->store->namedAs($type, $old->entity->id) ?? $old->entity->id;
+                $operations = [];
+                foreach ($old->operations as $operation) {
+                    $target = $references[$type][$operation->field] ?? null;
+                    $value = $operation->value->exists ? $operation->value->value() : null;
+                    $named = $target !== null && is_string($value) ? $this->store->namedAs($target, $value) : null;
+                    $operations[] = $named === null ? $operation : FieldOperation::set($operation->field, $named);
+                }
+
+                return $this->append(new EntityKey($space, $type, $id), $old->kind, $operations, $old->baseVersion->value, $old->atomic, $old->resolution, null);
             }
 
             return null;

@@ -77,14 +77,16 @@ interface OutboxStore
     public function setAcknowledged(Replica $replica, string $space, int $sequence): void;
 
     /**
-     * Set the acknowledged sequence to exactly this, lower or higher.
+     * Set the acknowledged sequence to exactly this, lower or higher - but only
+     * if it still is $expected, in one atomic step: two deliveries can get the
+     * same answer, and the late one must not wind back the other's progress.
      *
      * Only for a server that has said where it is. A gap is reported when this
      * device is AHEAD - a server restored from a backup - and a counter that
      * could only rise would resend the same number and get the same gap for
      * ever.
      */
-    public function resetAcknowledged(Replica $replica, string $space, int $sequence): void;
+    public function resetAcknowledged(Replica $replica, string $space, int $sequence, int $expected): void;
 
     /**
      * The name the server gave a record this device created under a handle.
@@ -94,6 +96,9 @@ interface OutboxStore
      * that says what its handle became.
      */
     public function nameOf(EntityKey $handle): ?EntityKey;
+
+    /** The name a handle of this type became, whatever space it was queued in. */
+    public function namedAs(string $entityType, string $handle): ?string;
 
     public function acknowledge(string $mutationId): void;
 
@@ -114,7 +119,8 @@ interface OutboxStore
     public function pending(?string $entityType = null): int;
 
     /**
-     * Mutations still queued, of the given entity types, oldest first.
+     * Mutations still queued and not yet handed out, of the given entity
+     * types, oldest first.
      * Narrowed by the store, so a large backlog of unrelated writes is never
      * decoded.
      *
@@ -123,11 +129,24 @@ interface OutboxStore
      */
     public function queued(array $entityTypes): array;
 
+    /** The oldest write still queued for this record, or null. */
+    public function firstFor(string $entityType, string $entityId): ?Mutation;
+
+    /** A queued write by its identity, or null when it is no longer queued. */
+    public function find(string $mutationId): ?Mutation;
+
     /**
-     * Where a record this device still has queued writes for is queued - its
-     * key, space included - or null when nothing for it is queued.
+     * Note that this write has been handed out for sending. From then on it
+     * may be on the server, so it is never rewritten - a changed write under
+     * the same identity would be refused as reused.
      */
-    public function queuedKey(string $entityType, string $entityId): ?EntityKey;
+    public function markAttempted(string $mutationId): void;
+
+    /**
+     * Move queued writes of one type from one space label to another - the
+     * scope they were queued under turned out to have a different name.
+     */
+    public function relabel(string $entityType, string $from, string $to): void;
 
     /**
      * @template TResult

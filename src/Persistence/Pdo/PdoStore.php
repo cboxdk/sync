@@ -209,11 +209,25 @@ class PdoStore implements Store
         $this->transaction($space, function () use ($space, $from): bool {
             $this->run('UPDATE sync_spaces SET retained_from = ? WHERE space = ? AND retained_from < ?', [$from->value, $space, $from->value]);
             $this->run('DELETE FROM sync_commits WHERE space = ? AND sequence < ?', [$space, $from->value]);
+            // Exactly the positions whose answer is about to go, per stream -
+            // not everything a stream has acknowledged, which turned the
+            // first retention run into a wall for any writer behind it.
+            $highest = [];
+            foreach ($this->pairs('SELECT replica_id, MAX(sequence) FROM sync_receipts WHERE space = ? AND commit_sequence < ? AND sequence IS NOT NULL GROUP BY replica_id', [$space, $from->value]) as [$replica, $sequence]) {
+                // Keyed with a prefix: a numeric replica id would otherwise
+                // become an integer array key and be bound as a number.
+                $highest['r'.$replica] = max($highest['r'.$replica] ?? 0, (int) $sequence);
+            }
+            // Receipts from before those columns existed say it only inside.
+            foreach ($this->pairs('SELECT mutation_id, payload FROM sync_receipts WHERE space = ? AND commit_sequence < ? AND sequence IS NULL', [$space, $from->value]) as [, $payload]) {
+                $receipt = Payload::decode($payload, Receipt::class);
+                $replica = $receipt->mutation->replica->id;
+                $highest['r'.$replica] = max($highest['r'.$replica] ?? 0, $receipt->mutation->sequence->value);
+            }
+            foreach ($highest as $key => $sequence) {
+                $this->run('UPDATE sync_streams SET pruned_through = ? WHERE space = ? AND replica_id = ? AND pruned_through < ?', [$sequence, $space, substr($key, 1), $sequence]);
+            }
             $this->run('DELETE FROM sync_receipts WHERE space = ? AND commit_sequence < ?', [$space, $from->value]);
-            // Over-approximates on purpose: every sequence a stream has had
-            // acknowledged may have lost its receipt. One that still has it is
-            // answered from it before this mark is ever consulted.
-            $this->run('UPDATE sync_streams SET pruned_through = acknowledged WHERE space = ?', [$space]);
 
             return true;
         });
@@ -407,5 +421,23 @@ class PdoStore implements Store
     private function run(string $sql, array $bindings): void
     {
         $this->connection()->prepare($sql)->execute($bindings);
+    }
+
+    /**
+     * @param  list<string|int|null>  $bindings
+     * @return list<array{0: string, 1: string}>
+     */
+    private function pairs(string $sql, array $bindings): array
+    {
+        $statement = $this->connection()->prepare($sql);
+        $statement->execute($bindings);
+        $pairs = [];
+        foreach ($statement->fetchAll(\PDO::FETCH_NUM) as $row) {
+            if (is_array($row) && is_scalar($row[0] ?? null) && is_scalar($row[1] ?? null)) {
+                $pairs[] = [(string) $row[0], (string) $row[1]];
+            }
+        }
+
+        return $pairs;
     }
 }

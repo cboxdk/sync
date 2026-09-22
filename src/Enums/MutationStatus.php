@@ -15,4 +15,5 @@ enum MutationStatus: string
     case Rejected = 'rejected';
     case MutationGap = 'mutation_gap';
     case PullRequired = 'pull_required';
+    case ReceiptPruned = 'receipt_pruned';
 }

@@ -5,7 +5,6 @@ declare(strict_types=1);
 use Cbox\Sync\Data\FieldOperation as Op;
 use Cbox\Sync\Enums\MutationStatus;
 use Cbox\Sync\Exceptions\HistoryUnavailable;
-use Cbox\Sync\Exceptions\ProtocolException;
 use Cbox\Sync\Persistence\InMemoryStore;
 use Cbox\Sync\Tests\Fixtures\ViewScenario;
 use Cbox\Sync\ValueObjects\CommitSequence;
@@ -95,20 +94,43 @@ it('prunes the receipts written in the commits it drops, and keeps the rest', fu
 
 /**
  * Past the horizon a replay has no receipt to be answered from, and it cannot
- * be told apart from a new write. It is refused as final - never renumbered,
- * which would apply it a second time over whatever came after it.
+ * be told apart from a new write. It is final - never renumbered, which would
+ * apply it a second time - but the answer says where the stream is, so the
+ * writer abandons that one write and carries on with the next.
  */
-it('refuses a replay whose receipt was pruned instead of applying it again', function () {
+it('refuses a replay whose receipt was pruned, and tells the writer where to go on from', function () {
     $this->seedRecord();
     $this->write('a', 1, [Op::set('title', 'once')]);
     $this->write('a', 2, [Op::set('title', 'twice')], base: 2);
     $this->store->prune('test', new CommitSequence(3));
 
-    expect(fn () => $this->write('a', 1, [Op::set('title', 'once')]))->toThrow(ProtocolException::class, 'pruned');
-    expect($this->record()->value('title')->value())->toBe('twice');
+    $replay = $this->write('a', 1, [Op::set('title', 'once')]);
+    expect($replay->status)->toBe(MutationStatus::ReceiptPruned)
+        ->and($replay->acknowledgedSequence)->toBe(2)
+        ->and($this->record()->value('title')->value())->toBe('twice');
 
-    // A number past what was pruned is still just a writer that is behind.
+    // Position 2 was pruned too; 3 was never used.
     expect($this->write('a', 3, [Op::set('title', 'next')], base: 3)->status)->toBe(MutationStatus::Applied);
+});
+
+/**
+ * The mark is exactly what was pruned. It used to be everything the stream
+ * had acknowledged, so any retention run - even one that deleted nothing -
+ * made a writer that was behind unable to write again.
+ */
+it('marks only the positions whose receipts were actually pruned', function () {
+    $this->seedRecord();
+    foreach (range(1, 4) as $sequence) {
+        $this->write('a', $sequence, [Op::set('title', 't'.$sequence)], base: $sequence);
+    }
+    // Deletes the seed's and a-1's receipts only.
+    $this->store->prune('test', new CommitSequence(3));
+
+    // A restored writer reusing position 3 with a new identity: behind, not pruned.
+    $behind = $this->engine->process($this->mutation('a', 3, [Op::set('title', 'new')], 5, id: 'fresh'));
+    expect($behind->status)->toBe(MutationStatus::MutationGap)
+        ->and($behind->reason)->toBe('sequence_behind')
+        ->and($behind->acknowledgedSequence)->toBe(4);
 });
 
 /** A dependency pruned with the log is no knowledge, not a refusal. */

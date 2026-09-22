@@ -22,6 +22,9 @@ class InMemoryOutboxStore implements OutboxStore
     /** @var array<string, int> */
     private array $acknowledged = [];
 
+    /** @var array<string, true> */
+    private array $attempted = [];
+
     /** @var array<string, EntityKey> handle key => the name the server gave it */
     private array $names = [];
 
@@ -86,9 +89,59 @@ class InMemoryOutboxStore implements OutboxStore
         $this->acknowledged[$key] = max($sequence, $this->acknowledged[$key] ?? 0);
     }
 
-    public function resetAcknowledged(Replica $replica, string $space, int $sequence): void
+    public function resetAcknowledged(Replica $replica, string $space, int $sequence, int $expected): void
     {
-        $this->acknowledged[self::stream($replica, $space)] = $sequence;
+        $key = self::stream($replica, $space);
+        if (($this->acknowledged[$key] ?? 0) === $expected) {
+            $this->acknowledged[$key] = $sequence;
+        }
+    }
+
+    public function namedAs(string $entityType, string $handle): ?string
+    {
+        foreach ($this->names as $key => $name) {
+            if ($name->type === $entityType && $key === (new EntityKey($name->space, $entityType, $handle))->key()) {
+                return $name->id;
+            }
+        }
+
+        return null;
+    }
+
+    public function firstFor(string $entityType, string $entityId): ?Mutation
+    {
+        foreach ($this->queue as $mutation) {
+            if ($mutation->entity->type === $entityType && $mutation->entity->id === $entityId) {
+                return $mutation;
+            }
+        }
+
+        return null;
+    }
+
+    public function find(string $mutationId): ?Mutation
+    {
+        foreach ($this->queue as $mutation) {
+            if ($mutation->id === $mutationId) {
+                return $mutation;
+            }
+        }
+
+        return null;
+    }
+
+    public function markAttempted(string $mutationId): void
+    {
+        $this->attempted[$mutationId] = true;
+    }
+
+    public function relabel(string $entityType, string $from, string $to): void
+    {
+        foreach ($this->queue as $index => $mutation) {
+            if ($mutation->entity->type === $entityType && $mutation->entity->space === $from) {
+                $this->queue[$index] = $mutation->withEntity(new EntityKey($to, $entityType, $mutation->entity->id));
+            }
+        }
     }
 
     public function nameOf(EntityKey $handle): ?EntityKey
@@ -138,20 +191,9 @@ class InMemoryOutboxStore implements OutboxStore
         return count(array_filter($this->queue, fn (Mutation $m): bool => $m->entity->type === $entityType));
     }
 
-    public function queuedKey(string $entityType, string $entityId): ?EntityKey
-    {
-        foreach ($this->queue as $mutation) {
-            if ($mutation->entity->type === $entityType && $mutation->entity->id === $entityId) {
-                return $mutation->entity;
-            }
-        }
-
-        return null;
-    }
-
     public function queued(array $entityTypes): array
     {
-        return array_values(array_filter($this->queue, fn (Mutation $m): bool => in_array($m->entity->type, $entityTypes, true)));
+        return array_values(array_filter($this->queue, fn (Mutation $m): bool => ! isset($this->attempted[$m->id]) && in_array($m->entity->type, $entityTypes, true)));
     }
 
     public function transaction(\Closure $callback): mixed
@@ -160,11 +202,11 @@ class InMemoryOutboxStore implements OutboxStore
             throw new TransientFailure('Nested outbox transaction is unsupported');
         }
         $this->active = true;
-        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged, $this->names];
+        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted];
         try {
             return $callback();
         } catch (\Throwable $failure) {
-            [$this->queue, $this->abandoned, $this->acknowledged, $this->names] = $snapshot;
+            [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted] = $snapshot;
 
             throw $failure;
         } finally {

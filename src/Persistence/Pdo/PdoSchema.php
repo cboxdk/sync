@@ -333,6 +333,10 @@ class PdoSchema
                     // can prune the receipts with it. Nullable: a receipt from
                     // before the column existed has none, and is kept.
                     'commit_sequence BIGINT NULL',
+                    // Which stream position the receipt answers, so pruning
+                    // can say exactly which positions lost their answer.
+                    "replica_id $name NULL",
+                    'sequence BIGINT NULL',
                     "payload $text NOT NULL",
                 ],
                 'primaryKey' => ['mutation_id'],

@@ -554,3 +554,57 @@ it('finds where writes for a record are still queued', function (OutboxStore $st
     $outbox->acknowledged($outbox->head() ?? throw new LogicException('expected a head'));
     expect($outbox->queuedKey('nodes', 'parent'))->toBeNull();
 })->with(outboxStores());
+
+/** A write handed out may be on the server; rewriting it would make its retry a reused identity. */
+it('never rewrites a write that has been handed out for sending', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-1', 'tasks', 't'), MutationKind::Create, [Op::set('project_id', 'p-handle')], 0);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p-handle'), MutationKind::Create, [Op::set('name', 'x')], 0);
+    $inFlight = $outbox->head('tasks') ?? throw new LogicException('expected the task');
+
+    $outbox->acknowledged($outbox->take($outbox->queuedCreate('projects', 'p-handle')?->id ?? '') ?? throw new LogicException('expected the project'), new EntityKey('team-1', 'projects', 'p-real'), ['tasks' => ['project_id' => 'projects']]);
+
+    expect($outbox->head('tasks')?->operations[0]->value->value())->toBe('p-handle')
+        ->and($outbox->head('tasks')?->id)->toBe($inFlight->id);
+})->with(outboxStores());
+
+/** A scope that is a parent's handle moves to the parent's name when the parent is named. */
+it('moves writes scoped by a created record to its name', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p-handle'), MutationKind::Create, [Op::set('name', 'x')], 0);
+    $outbox->queue(new EntityKey('p-handle', 'items', 'i'), MutationKind::Create, [Op::set('t', 'y')], 0);
+
+    $outbox->acknowledged($outbox->head('projects') ?? throw new LogicException('expected the project'), new EntityKey('team-1', 'projects', 'p-real'), scopedBy: ['items' => 'projects']);
+
+    expect($outbox->peek('items', 'p-real')?->entity->id)->toBe('i')
+        ->and($outbox->peek('items', 'p-handle'))->toBeNull();
+})->with(outboxStores());
+
+/** A requeued write goes back under the names the server gave everything it mentions. */
+it('requeues under the names the server has given since', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p-handle'), MutationKind::Create, [Op::set('name', 'x')], 0);
+    $outbox->queue(new EntityKey('p-handle', 'items', 'i'), MutationKind::Create, [Op::set('project_id', 'p-handle')], 0);
+    $item = $outbox->head('items') ?? throw new LogicException('expected the item');
+    $outbox->abandon($item, 'forbidden');
+    $outbox->acknowledged($outbox->head('projects') ?? throw new LogicException('expected the project'), new EntityKey('team-1', 'projects', 'p-real'));
+
+    $again = $outbox->requeue($item->id, ['items' => ['project_id' => 'projects']], ['items' => 'projects']);
+
+    expect($again?->entity->space)->toBe('p-real')
+        ->and($again?->operations[0]->value->value())->toBe('p-real');
+})->with(outboxStores());
+
+/** A device database from before the id column: its rows are found by id after the upgrade. */
+it('fills in the id column for rows queued before it existed', function () {
+    $pdo = new PDO('sqlite::memory:');
+    $store = new PdoOutboxStore($pdo);
+    $store->migrate();
+    $outbox = outboxFor($store);
+    $outbox->queue(note('legacy'), MutationKind::Create, [Op::set('t', 'x')], 0);
+    $pdo->exec('UPDATE sync_outbox SET entity_id = NULL');
+
+    $store->migrate();
+
+    expect($outbox->queuedKey('notes', 'legacy')?->space)->toBe('team-1');
+});

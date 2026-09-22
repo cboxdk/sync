@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\Sync\ValueObjects;
 
+use Cbox\Sync\Data\Mutation;
 use Cbox\Sync\Exceptions\InvalidRequest;
 
 /**
@@ -21,13 +22,29 @@ final class Identifier
 {
     public const MAX_LENGTH = 150;
 
+    /** Every identifier a new write carries, bounded at the point it is made. */
+    public static function checkMutation(Mutation $mutation): void
+    {
+        self::check($mutation->id, 'Mutation id');
+        if ($mutation->dependsOn !== null) {
+            self::check($mutation->dependsOn, 'Mutation dependency');
+        }
+        self::check($mutation->entity->space, 'Space');
+        self::check($mutation->entity->type, 'Entity type');
+        self::check($mutation->entity->id, 'Entity id');
+        self::check($mutation->replica->id, 'Replica identity');
+    }
+
     public static function check(string $value, string $what): void
     {
         if ($value === '') {
             throw new InvalidRequest($what.' must not be empty');
         }
-        // PostgreSQL text cannot hold a NUL at all, so it would store on one
-        // driver and fail on another.
+        // Valid UTF-8 and no NUL, because MySQL and PostgreSQL refuse either
+        // with a driver error that SQLite would have stored.
+        if (preg_match('//u', $value) !== 1) {
+            throw new InvalidRequest($what.' must be valid UTF-8');
+        }
         if (str_contains($value, "\0")) {
             throw new InvalidRequest($what.' must not contain a NUL byte');
         }
@@ -36,18 +53,13 @@ final class Identifier
         }
     }
 
-    /**
-     * Characters, as the columns count them - without requiring mbstring. A
-     * value that is not valid UTF-8 is counted in bytes, which can only make
-     * the bound stricter.
-     */
+    /** Characters, as the columns count them - without requiring mbstring. */
     private static function length(string $value): int
     {
         if (strlen($value) <= self::MAX_LENGTH) {
             return strlen($value);
         }
-        $characters = preg_match_all('/./su', $value);
 
-        return $characters === false ? strlen($value) : $characters;
+        return (int) preg_match_all('/./su', $value);
     }
 }
