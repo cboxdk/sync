@@ -358,11 +358,7 @@ class Engine
         if ($mutation->dependsOn === null) {
             return [];
         }
-        // Again as the latest committed state if this transaction's snapshot
-        // predates it: a host transaction that read before the space lock
-        // missed the device's previous write, and judged the next one in
-        // conflict with it.
-        $previous = $ledger->receipt($mutation->dependsOn) ?? $ledger->receiptOf($mutation->replica, $mutation->dependsOn, $mutation->sequence->value);
+        $previous = $ledger->receipt($mutation->dependsOn) ?? $this->recentReceipt($ledger, $mutation);
         if ($previous === null) {
             // Unknown - never processed, or its receipt pruned with the log.
             // Either way there is no knowledge to inherit, and inheriting none
@@ -381,6 +377,30 @@ class Engine
         }
 
         return $previous->result->acceptedVersions;
+    }
+
+    /**
+     * A dependency this transaction's snapshot may predate - a host
+     * transaction that read before the space lock missed the device's
+     * previous write, and judged the next one in conflict with it. Looked for
+     * among the stream's last few positions, each by an exact lookup that
+     * locks only its own row: a device depends on what it wrote just before.
+     */
+    private function recentReceipt(Ledger $ledger, Mutation $mutation): ?Receipt
+    {
+        if ($mutation->dependsOn === null) {
+            return null;
+        }
+        $ack = $ledger->acknowledged($mutation->replica);
+        $floor = max($ledger->prunedThrough($mutation->replica) + 1, $ack - 7, 1);
+        for ($position = min($ack, $mutation->sequence->value - 1); $position >= $floor; $position--) {
+            $receipt = $ledger->receiptAt($mutation->replica, $position);
+            if ($receipt !== null && $receipt->mutation->id === $mutation->dependsOn) {
+                return $receipt;
+            }
+        }
+
+        return null;
     }
 
     /** @param array<string, FieldVersion> $knowledge */

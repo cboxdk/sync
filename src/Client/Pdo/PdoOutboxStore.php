@@ -71,6 +71,9 @@ class PdoOutboxStore implements OutboxStore
         }
         if (! in_array('sends', $columns, true)) {
             $this->pdo->exec('ALTER TABLE sync_outbox ADD COLUMN sends INTEGER NOT NULL DEFAULT 0');
+            // An earlier release kept no record of its sendings, so any write
+            // already queued may have gone out without an answer.
+            $this->pdo->exec('UPDATE sync_outbox SET sends = 1');
         }
         // A write an earlier release sent and never heard back about carries
         // the placeholder number in its payload: that release numbered afresh

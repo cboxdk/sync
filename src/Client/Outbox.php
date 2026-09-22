@@ -611,7 +611,10 @@ class Outbox
     {
         $this->store->transaction(function () use ($mutation, $reason): void {
             $this->store->setAcknowledged($mutation->replica, $mutation->entity->space, $mutation->sequence->value);
-            $this->store->countAnswer($mutation->id);
+            // The server keeps an answer for every write it processed, and a
+            // resend of the same identity gets that answer back: this refusal
+            // proves no sending of it applied.
+            $this->store->clearSends($mutation->id);
             $this->store->abandon($mutation->id, $reason);
         });
     }
@@ -621,11 +624,12 @@ class Outbox
      * identity, so it leaves the queue rather than blocking everything behind
      * it forever. The application has to be told.
      */
-    public function abandon(Mutation $mutation, string $reason): void
+    public function abandon(Mutation $mutation, string $reason, bool $answered = true): void
     {
-        $this->store->transaction(function () use ($mutation, $reason): void {
-            if ($this->store->isSent($mutation->id)) {
-                // Refused on an answer: that sending is accounted for.
+        $this->store->transaction(function () use ($mutation, $reason, $answered): void {
+            if ($answered && $this->store->isSent($mutation->id)) {
+                // Refused on an answer: that sending is accounted for. One
+                // given up on without an answer still may have landed.
                 $this->store->countAnswer($mutation->id);
             }
             $this->store->abandon($mutation->id, $reason);

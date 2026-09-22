@@ -750,6 +750,42 @@ it('uses the relations it was given when dismiss is not told them', function (Ou
     expect($outbox->abandoned()[0]['mutation']->id)->toBe($child->id);
 })->with(outboxStores());
 
+/** The server keeps an answer for every write it processed, so a processed refusal proves no sending of it applied. */
+it('clears the unanswered count when the server processed and refused the write', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $write = $outbox->head() ?? throw new LogicException('expected a');
+    $outbox->head(); // the first answer was lost
+    $outbox->refused($write, 'validation_failed');
+
+    expect($store->unanswered($write->id))->toBe(0)
+        ->and($outbox->requeue($write->id))->not->toBeNull();
+})->with(outboxStores());
+
+/** A write given up on without an answer may still have landed. */
+it('keeps a write abandoned without an answer as possibly landed', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $write = $outbox->head() ?? throw new LogicException('expected a');
+    $outbox->abandon($write, 'timed_out', answered: false);
+
+    expect(fn () => $outbox->requeue($write->id))->toThrow(InvalidRequest::class);
+})->with(outboxStores());
+
+/** An earlier release kept no record of its sendings, so a write queued before the upgrade may have gone out unanswered. */
+it('counts a write queued before sendings were recorded as possibly sent', function () {
+    $pdo = new PDO('sqlite::memory:');
+    $store = new PdoOutboxStore($pdo);
+    $store->migrate();
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $pdo->exec('ALTER TABLE sync_outbox DROP COLUMN sends');
+
+    $store->migrate();
+
+    expect($store->unanswered('m1'))->toBe(1);
+});
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
