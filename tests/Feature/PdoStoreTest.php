@@ -13,6 +13,7 @@ use Cbox\Sync\Data\RecordCriteria;
 use Cbox\Sync\Engine;
 use Cbox\Sync\Enums\MutationKind;
 use Cbox\Sync\Enums\MutationStatus;
+use Cbox\Sync\Persistence\Pdo\PdoSchema;
 use Cbox\Sync\Persistence\Pdo\PdoStore;
 use Cbox\Sync\Resolvers\RejectOnConflict;
 use Cbox\Sync\Testing\FakeIdGenerator;
@@ -163,7 +164,10 @@ it('gives receipts from an earlier release their stream position on migrate', fu
     $engine->process(new Mutation('m1', $key, new Replica('device'), new MutationSequence(1), MutationKind::Create, new RecordVersion(0), [FieldOperation::set('title', 'a')]));
     $pdo->exec('UPDATE sync_receipts SET replica_id = NULL, sequence = NULL');
 
-    $store->migrate();
+    // As a host's migration runs it: the schema installed inside a transaction.
+    $pdo->beginTransaction();
+    (new PdoSchema('sqlite'))->install($pdo);
+    $pdo->commit();
 
     expect($pdo->query("SELECT replica_id || ':' || sequence FROM sync_receipts WHERE mutation_id = 'm1'")->fetchColumn())->toBe('device:1');
 });

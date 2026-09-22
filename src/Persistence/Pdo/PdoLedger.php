@@ -163,7 +163,9 @@ class PdoLedger implements Ledger
             if (! in_array($exception->getCode(), ['23000', '23505'], true)) {
                 throw $exception;
             }
-            if (str_contains($exception->getMessage(), 'stream_position') || str_contains($exception->getMessage(), 'sync_receipts.sequence')) {
+            // By the constraint's name, never the whole message: MySQL and
+            // PostgreSQL quote the duplicate value, which a client chooses.
+            if (preg_match('/key \'[^\']*sync_receipts_stream_position\'|constraint "sync_receipts_stream_position"|failed: sync_receipts\.space, sync_receipts\.replica_id, sync_receipts\.sequence/', $exception->getMessage()) === 1) {
                 // The position, not the identity: this stream's acknowledged
                 // sequence and its receipts disagree - a partial restore, a
                 // hand edit. Sending again meets the same row for ever, so it

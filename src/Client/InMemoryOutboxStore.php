@@ -227,7 +227,7 @@ class InMemoryOutboxStore implements OutboxStore
 
     public function abandoned(): array
     {
-        return array_values(array_filter($this->abandoned, fn (array $entry): bool => ! str_starts_with($entry['reason'], Outbox::DISMISSED)));
+        return array_values(array_filter($this->abandoned, fn (array $entry): bool => ! isset($this->dismissed[$entry['mutation']->id])));
     }
 
     public function setReason(string $mutationId, string $reason): void
@@ -239,20 +239,44 @@ class InMemoryOutboxStore implements OutboxStore
         }
     }
 
+    /** @var array<string, true> */
+    private array $dismissed = [];
+
     public function abandonedCreate(string $entityType, string $entityId): ?array
     {
+        $found = null;
         foreach ($this->abandoned as $entry) {
             $mutation = $entry['mutation'];
-            if ($mutation->kind === MutationKind::Create && $mutation->entity->type === $entityType && $mutation->entity->id === $entityId) {
-                return $entry;
+            if ($mutation->kind !== MutationKind::Create || $mutation->entity->type !== $entityType || $mutation->entity->id !== $entityId) {
+                continue;
+            }
+            // Reported before dismissed, the latest before older ones.
+            if ($found === null || isset($this->dismissed[$found['mutation']->id]) || ! isset($this->dismissed[$mutation->id])) {
+                $found = $entry;
             }
         }
 
-        return null;
+        return $found;
+    }
+
+    public function markDismissed(string $mutationId): void
+    {
+        $this->dismissed[$mutationId] = true;
+    }
+
+    public function forgetDismissedCreates(string $entityType, string $entityId): void
+    {
+        foreach ($this->abandoned as $entry) {
+            $mutation = $entry['mutation'];
+            if (isset($this->dismissed[$mutation->id]) && $mutation->kind === MutationKind::Create && $mutation->entity->type === $entityType && $mutation->entity->id === $entityId) {
+                $this->forget($mutation->id);
+            }
+        }
     }
 
     public function forget(string $mutationId): void
     {
+        unset($this->dismissed[$mutationId]);
         $this->acknowledge($mutationId);
         $this->abandoned = array_values(array_filter($this->abandoned, fn (array $entry): bool => $entry['mutation']->id !== $mutationId));
     }
@@ -296,11 +320,11 @@ class InMemoryOutboxStore implements OutboxStore
             throw new TransientFailure('Nested outbox transaction is unsupported');
         }
         $this->active = true;
-        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles];
+        $snapshot = [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles, $this->dismissed];
         try {
             return $callback();
         } catch (\Throwable $failure) {
-            [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles] = $snapshot;
+            [$this->queue, $this->abandoned, $this->acknowledged, $this->names, $this->attempted, $this->sends, $this->handles, $this->dismissed] = $snapshot;
 
             throw $failure;
         } finally {

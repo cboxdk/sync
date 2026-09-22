@@ -878,6 +878,46 @@ it('relabels children already abandoned when their parent turns out to have mayb
         ->and($outbox->mayHaveLanded($child->id))->toBeFalse();
 })->with(outboxStores());
 
+/**
+ * A dismissed create kept blocking a record created again under the same id:
+ * the server accepted the new one and kept the id, no name was recorded, and
+ * every later edit and child was abandoned as needing the dismissed one.
+ */
+it('stops a dismissed create blocking a record created again under its id', function (OutboxStore $store) {
+    $outbox = outboxFor($store)->relatedBy(['tasks' => ['project_id' => 'projects']], []);
+    $first = $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'bad')], 0);
+    $outbox->refused($outbox->head('projects') ?? throw new LogicException('expected the create'), 'validation_failed');
+    $outbox->dismiss($first->id);
+
+    $outbox->queue(new EntityKey('team-1', 'projects', 'p'), MutationKind::Create, [Op::set('t', 'good')], 0);
+    $outbox->acknowledged($outbox->head('projects') ?? throw new LogicException('expected the new create'));
+
+    expect($outbox->orphanReason('projects', 'p'))->toBeNull()
+        ->and($store->abandonedCreate('projects', 'p'))->toBeNull();
+})->with(outboxStores());
+
+/** A reason that happened to start like the old dismissed marker hid the write for good. */
+it('reports an abandoned write whatever its reason says', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $outbox->refused($outbox->head() ?? throw new LogicException('expected a'), 'dismissed:by_server');
+
+    expect($outbox->abandoned())->toHaveCount(1);
+})->with(outboxStores());
+
+/** A late refusal of a write the application already dismissed reported it again. */
+it('does not bring a dismissed write back on a late refusal', function (OutboxStore $store) {
+    $outbox = outboxFor($store);
+    $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);
+    $write = $outbox->head() ?? throw new LogicException('expected a');
+    $outbox->refused($write, 'validation_failed');
+    $outbox->dismiss($write->id);
+
+    $outbox->refused($write, 'validation_failed');
+
+    expect($outbox->abandoned())->toBe([]);
+})->with(outboxStores());
+
 it('makes a valid stream from a device id of any valid length', function () {
     $outbox = Outbox::for(new InMemoryOutboxStore, new Replica(str_repeat('d', 150)));
     $outbox->queue(note('a'), MutationKind::Create, [Op::set('t', 'a')], 0);

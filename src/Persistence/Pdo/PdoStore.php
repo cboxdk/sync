@@ -59,39 +59,6 @@ class PdoStore implements Store
     public function migrate(): void
     {
         $this->schema->install($this->connection());
-        $this->backfillReceiptPositions();
-    }
-
-    /**
-     * Receipts from before they carried their stream position get it from
-     * their own payload, so a latest-state lookup by position finds the row it
-     * locks rather than locking the gap where it would be - which can border
-     * another tenant's range. In batches; a position already taken is left.
-     */
-    private function backfillReceiptPositions(): void
-    {
-        $after = '';
-        do {
-            $statement = $this->connection()->prepare('SELECT mutation_id, payload FROM sync_receipts WHERE replica_id IS NULL AND mutation_id > ? ORDER BY mutation_id LIMIT 500');
-            $statement->execute([$after]);
-            $rows = $statement->fetchAll(\PDO::FETCH_NUM);
-            foreach ($rows as $row) {
-                if (! is_array($row) || ! is_string($row[0] ?? null) || ! is_string($row[1] ?? null)) {
-                    continue;
-                }
-                $after = $row[0];
-                $receipt = Payload::decode($row[1], Receipt::class);
-                try {
-                    $this->run('UPDATE sync_receipts SET replica_id = ?, sequence = ? WHERE mutation_id = ?', [$receipt->mutation->replica->id, $receipt->mutation->sequence->value, $row[0]]);
-                } catch (\PDOException $taken) {
-                    // Two old receipts at one position: this one stays as it
-                    // was. Anything else is a real failure.
-                    if (! in_array($taken->getCode(), ['23000', '23505'], true)) {
-                        throw $taken;
-                    }
-                }
-            }
-        } while (count($rows) === 500);
     }
 
     public function transaction(string $space, \Closure $callback): mixed

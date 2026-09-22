@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\Sync\Persistence\Pdo;
 
+use Cbox\Sync\Data\Receipt;
 use Cbox\Sync\Exceptions\InvalidRequest;
 
 /**
@@ -102,6 +103,39 @@ class PdoSchema
             $connection->exec($statement);
         }
         $this->addMissingIndexes($connection);
+        $this->backfillReceiptPositions($connection);
+    }
+
+    /**
+     * Receipts from before they carried their stream position get it from
+     * their own payload, so a latest-state lookup by position finds the row it
+     * locks rather than locking the gap where it would be - which can border
+     * another tenant's range. Here, in install(), so a host whose migrations
+     * call it directly gets it too. In batches; a position already taken is
+     * left as it was, checked first rather than caught, because a failed
+     * statement aborts a PostgreSQL transaction and hosts migrate inside one.
+     */
+    private function backfillReceiptPositions(\PDO $connection): void
+    {
+        $after = '';
+        $select = $connection->prepare('SELECT mutation_id, space, payload FROM sync_receipts WHERE replica_id IS NULL AND mutation_id > ? ORDER BY mutation_id LIMIT 500');
+        $taken = $connection->prepare('SELECT 1 FROM sync_receipts WHERE space = ? AND replica_id = ? AND sequence = ?');
+        $update = $connection->prepare('UPDATE sync_receipts SET replica_id = ?, sequence = ? WHERE mutation_id = ?');
+        do {
+            $select->execute([$after]);
+            $rows = $select->fetchAll(\PDO::FETCH_NUM);
+            foreach ($rows as $row) {
+                if (! is_array($row) || ! is_string($row[0] ?? null) || ! is_string($row[1] ?? null) || ! is_string($row[2] ?? null)) {
+                    continue;
+                }
+                $after = $row[0];
+                $mutation = Payload::decode($row[2], Receipt::class)->mutation;
+                $taken->execute([$row[1], $mutation->replica->id, $mutation->sequence->value]);
+                if ($taken->fetchColumn() === false) {
+                    $update->execute([$mutation->replica->id, $mutation->sequence->value, $row[0]]);
+                }
+            }
+        } while (count($rows) === 500);
     }
 
     private function addMissingColumns(\PDO $connection): void

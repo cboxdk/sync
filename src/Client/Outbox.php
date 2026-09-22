@@ -27,13 +27,6 @@ use Cbox\Sync\ValueObjects\Replica;
  */
 class Outbox
 {
-    /**
-     * The reason prefix of a create the application has dismissed. Kept, not
-     * deleted, and no longer reported: it is the one thing that still says the
-     * handle was a record this device created and never learned the name of.
-     */
-    public const DISMISSED = 'dismissed:';
-
     /** @var array<string, array<string, string>> type => [field => the type it points at] */
     private array $references = [];
 
@@ -108,6 +101,11 @@ class Outbox
         );
         Identifier::checkMutation($mutation);
         $this->store->append($mutation);
+        if ($kind === MutationKind::Create) {
+            // A new create for a record whose earlier one was dismissed: the
+            // dismissed one no longer says anything about it.
+            $this->store->forgetDismissedCreates($entity->type, $entity->id);
+        }
 
         return $mutation;
     }
@@ -330,7 +328,9 @@ class Outbox
     public function orphanReason(string $entityType, string $entityId): ?string
     {
         $create = $this->store->abandonedCreate($entityType, $entityId);
-        if ($create === null) {
+        // Named after all - found, or created again under the same id and
+        // accepted - or on its way again: nothing is missing.
+        if ($create === null || $this->store->namedAs($entityType, $entityId) !== null || $this->queuedCreate($entityType, $entityId) !== null) {
             return null;
         }
 
@@ -348,9 +348,7 @@ class Outbox
     /** @param array{mutation: Mutation, reason: string} $entry */
     private function mayHaveLandedAs(array $entry): bool
     {
-        $reason = str_starts_with($entry['reason'], self::DISMISSED) ? substr($entry['reason'], strlen(self::DISMISSED)) : $entry['reason'];
-
-        return in_array($reason, self::MAY_HAVE_LANDED, true) || $this->store->unanswered($entry['mutation']->id) > 0;
+        return in_array($entry['reason'], self::MAY_HAVE_LANDED, true) || $this->store->unanswered($entry['mutation']->id) > 0;
     }
 
     /** Move queued writes of a type from one scope label to another. */
@@ -439,6 +437,9 @@ class Outbox
         $this->store->transaction(function () use ($mutation, $named, $references, $scopedBy): void {
             $this->store->setAcknowledged($mutation->replica, $mutation->entity->space, $mutation->sequence->value);
             $this->store->acknowledge($mutation->id);
+            if ($mutation->kind === MutationKind::Create) {
+                $this->store->forgetDismissedCreates($mutation->entity->type, $mutation->entity->id);
+            }
             if ($named !== null && ! $named->equals($mutation->entity)) {
                 $this->store->rekey($mutation->entity, $named);
                 $this->rewriteReferences($mutation->entity, $named->id, $references);
@@ -834,7 +835,7 @@ class Outbox
             }
             // Kept, and no longer reported: it is what still says this handle
             // was never named.
-            $this->store->setReason($mutationId, self::DISMISSED.$entry['reason']);
+            $this->store->markDismissed($mutationId);
 
             return $cascaded;
         });
@@ -892,7 +893,7 @@ class Outbox
         }
         foreach ($parents as [$type, $handle, $own]) {
             $named = $own instanceof EntityKey ? $this->store->nameOf($own) : null;
-            if ($named === null && $this->store->namedAs($type, $handle) === null && $this->store->abandonedCreate($type, $handle) !== null) {
+            if ($named === null && $this->orphanReason($type, $handle) !== null) {
                 return [$type, $handle];
             }
         }

@@ -125,7 +125,8 @@ interface OutboxStore
     /**
      * The abandoned create for this record, if there is one - including one
      * the application has dismissed, which abandoned() no longer lists but
-     * which still says its record was never named.
+     * which still says its record was never named. One still reported comes
+     * before one dismissed, the latest before older ones.
      *
      * @return array{mutation: Mutation, reason: string}|null
      */
@@ -133,6 +134,15 @@ interface OutboxStore
 
     /** Remove a write from the store altogether, whatever state it is in. */
     public function forget(string $mutationId): void;
+
+    /**
+     * Keep an abandoned write, but stop reporting it: abandoned() and
+     * abandonedOne() leave it out, abandonedCreate() still finds it.
+     */
+    public function markDismissed(string $mutationId): void;
+
+    /** Remove the dismissed creates for this record: a new create for it is on its way, or landed. */
+    public function forgetDismissedCreates(string $entityType, string $entityId): void;
 
     /**
      * Abandoned writes still to be reported - not those dismissed.
