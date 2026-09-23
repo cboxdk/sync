@@ -1,32 +1,15 @@
 # Build status
 
-Framework-independent PHP foundation, released as 0.4.0 on 2026-09-18. One runtime requirement, `ext-pdo`, for the durable adapter. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync).
+Framework-independent PHP foundation for offline sync, released as 0.9.0 on 2026-09-22. Runtime requirements: `ext-pdo` and `ext-zlib`; a durable store needs SQLite 3.24+, MySQL 8.0.17+ or PostgreSQL 9.5+. Source repository: [cboxdk/sync](https://github.com/cboxdk/sync).
 
 Implemented:
 
-- Atomic domain application by default, explicit partial opt-in, complete blocked mutation preservation, per-field conflict detection and multi-candidate resolution.
-- RejectOnConflict and typed strict revision/validation failures as terminal acknowledged outcomes; exceptions roll back all effects.
-- Separate trusted actor/integration context alongside replica/mutation provenance; no-op receipts without canonical version increments or data notifications.
-- Whole-entity validation inside the storage transaction, covering partial results and explicit resolution.
-- Context-bound view cursors, paginated bootstrap, whole-commit delta, explicit global deletion versus scope removal, full representations on view entry.
-- Atomic client page/cursor application with multi-view ownership, cross-view canonical version protection and retained tombstone barriers.
-- Keyed `Ledger` transaction contract scoped to one space, with a one-level draft over records and groups; no engine dependence on PHP object identity.
-- Durable `PdoStore` for SQLite, MySQL 8+ and PostgreSQL: space-lock serialization, gapless commit sequences, savepoint drafts, indexed view scans, retention with a typed reset.
-- Durable client state and a local outbox, so a device survives being killed and still produces an ordered, gapless mutation stream.
-- Two bootstrap strategies: frozen in-process pages with byte-identical retry, and stateless authenticated keyset tokens that any process can serve.
-- Ordered/idempotent streams, safe offline dependencies, tombstones, transactional rollback and seeded N-way simulator, now on every adapter.
+- Per-space gapless commit log with field-level conflict detection, whole-candidate preservation, pluggable resolvers, and receipts that answer a replayed mutation exactly as the first delivery was answered.
+- `OnConflict::Pull`, so a writer can be refused a stale edit and rethink it, and `Engine::recordTrusted()` / `submit()` for a host's own writes, decided inside the space lock.
+- Views: paginated bootstrap, whole-commit delta, membership transitions, and `CurrentStateView` for rules that can only judge a record as it is now.
+- Durable PDO store for SQLite, MySQL and PostgreSQL, with retention (`prune()`), payload compression, and a schema that reconciles itself on install.
+- A device-side outbox: durable queue, one write in flight per stream, parent-first sending of records created offline, renaming to server ids, and every recovery path a lost answer needs.
 
-Verification on 2026-09-16:
+Verification: the suite runs against the in-memory store, SQLite, MySQL 8.4 and PostgreSQL, with a multi-process concurrency experiment proving the log stays gapless under contention, and a simulator over deterministic seeds. Pint, PHPStan max with the strict rules, dependency licenses, an audit and a docs-example parser run on every build; see `composer qa`.
 
-- Pest: 158 tests, ~1,668 assertions, run from the same fixtures against five configurations — in memory, against a store that shares no objects across commits, against SQLite, and against a real MySQL 8 and PostgreSQL. PHP 8.4 and 8.5.
-- Full composer qa passed: Pint, PHPStan max (source, testing fixtures and scripts), all three test runs, 61 dependency licenses and full locked dependency audit.
-- Strict Composer metadata validation; SBOM and generated requirements reproduce without drift.
-- Simulator seeds 7, 42 and 2026 produce identical results in memory, on SQLite and over a DSN.
-- `bin/concurrency.php`: 6 OS processes writing one space produce a gapless ascending commit log with every replica fully acknowledged.
-- Executed the quickstart, resolution, validator and bootstrap documentation examples; relative links valid; Cbox documentation importer reports complete.
-
-The contract moved substantially before this first tag; CHANGELOG.md records what changed. Being 0.x, a minor may still move it again: Composer's caret is narrow below 1.0, so `^0.1` will not resolve a future 0.2.
-
-Limits: no transport or wire format, no webhooks, no framework integration. Host authentication/authorization and cross-entity locking/constraints remain required. A space accepts one concurrent writer, by design: it is the ordering boundary. Stored payloads use PHP serialization, which is a storage detail of the reference adapter and not a cross-language format; the same is true of `Mutation::fingerprint()`. Crash durability under power loss depends on host database settings and is not proven here, nor is behaviour at non-default isolation levels or under lock-timeout tuning. Retention is available but never automatic. Filtered deltas project canonical data only; conflict/receipt delivery requires a separately authorized adapter projection. Epoch/history reset must discard old local state and version/tombstone barriers. Restore remains out of scope.
-
-There are no third-party runtime packages to audit. Composer reports an empty-package error for audit --no-dev; composer security-audit checks the entire lock file, including development tooling, instead.
+Limits: no HTTP transport or framework integration here - `cboxdk/laravel-sync` serves it and `cboxdk/laravel-sync-client` consumes it. Conflict candidates are not filtered for a reader: a host that exposes them must decide what a caller may see.

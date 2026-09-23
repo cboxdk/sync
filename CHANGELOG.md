@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 - Unreleased
+
+### Documentation
+
+- The outbox's reporting and recovery calls - `abandoned()`, `mayHaveLanded()`, `requeue()`, `dismiss()`, `found()`, `orphanReason()`, `relatedBy()` - and `InMemoryOutboxStore` are documented; `BUILD-STATUS.md` describes 0.9.
+
 ## 0.9.0 - 2026-09-22
 
 ### Added

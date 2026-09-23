@@ -84,7 +84,24 @@ Getting any of those wrong is silent data loss or a permanently wedged
 queue, which is why they are implemented once here rather than in each
 application. Abandoned mutations are kept with their reason and must be
 surfaced: nothing else will tell the user that a write is never going to land.
-A handle names one record on the device: queueing a create whose handle is already used for a record in another space is refused, since a reference to it carries no space. It must never equal a server id either - a reference to that server record would be rewritten to the handle's name. Use UUIDs.
+A handle names one record on the device: queueing a create whose handle is
+already used for a record in another space is refused, since a reference to it
+carries no space. It must never equal a server id either - a reference to that
+server record would be rewritten to the handle's name. Use UUIDs.
+
+## Reporting and recovery
+
+| Call | Answers |
+|---|---|
+| `abandoned()` | every write that will not land as asked, with the server's reason. Report these; nothing else will |
+| `mayHaveLanded($id)` | whether the server may hold it anyway - a sending that got no answer, or a pruned receipt. Check before offering to send it again |
+| `requeue($id)` | queue it once more, under a new identity and under every name the server has given since. Refuses a write that may have landed, or one needing a record whose create was abandoned and never named, unless you say you have checked |
+| `dismiss($id)` | stop reporting it. A dismissed create takes the writes that needed it along, and returns how many |
+| `found($handle, $name)` | what a record whose answer never came turned out to be called, so the writes waiting for it can go |
+| `orphanReason($type, $id)` | why a write that needs this record cannot be sent yet, if it cannot |
+| `relatedBy($references, $scopedBy)` | how your records point at each other, so the calls above know without being told each time |
+
+`Client\InMemoryOutboxStore` is the same queue without a database, for tests.
 
 A create that may have landed and is dismissed takes the writes that need it
 along as `parent_unknown`. Find the record on the server, tell the outbox what it
